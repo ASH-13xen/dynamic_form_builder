@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect */
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -15,18 +16,20 @@ const Login = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check if the backend sent us back with an error
     const errorParam = searchParams.get("error");
     if (errorParam) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError("Authentication failed. Please try again.");
     }
   }, [searchParams]);
 
   const handleLogin = () => {
-    // ⚠️ CRITICAL: We do NOT use axios here.
-    // We must redirect the browser entirely to the Backend to start OAuth.
-    window.location.href = "http://localhost:5000/api/auth/login";
+    // 1. Get the Backend URL from Environment Variables
+    // If running locally, it falls back to localhost:5000
+    // If on Vercel, it uses the VITE_API_URL you set in settings
+    const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+
+    // 2. Redirect to the Backend Auth Route
+    window.location.href = `${API_URL}/api/auth/login`;
   };
 
   return (
@@ -34,7 +37,6 @@ const Login = () => {
       <Card className="w-full max-w-md shadow-lg">
         <CardHeader className="text-center">
           <div className="mx-auto mb-4 bg-blue-100 p-3 rounded-full w-16 h-16 flex items-center justify-center">
-            {/* Simple Logo Icon */}
             <svg
               viewBox="0 0 24 24"
               fill="none"
@@ -58,7 +60,6 @@ const Login = () => {
         </CardHeader>
 
         <CardContent>
-          {/* Error Message Alert */}
           {error && (
             <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-center gap-2 text-red-700 text-sm">
               <AlertCircle size={16} />
@@ -66,7 +67,6 @@ const Login = () => {
             </div>
           )}
 
-          {/* Login Button */}
           <Button
             className="w-full h-12 text-lg bg-blue-600 hover:bg-blue-700"
             onClick={handleLogin}
