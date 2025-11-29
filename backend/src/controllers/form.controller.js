@@ -184,7 +184,10 @@ export const getFormResponses = async (req, res) => {
     }
 
     // B. Fetch Responses from MongoDB
-    const responses = await Response.find({ formId }).sort({ submittedAt: -1 });
+    const responses = await Response.find({
+      formId,
+      isDeletedInAirtable: { $ne: true }, // <--- THIS IS THE KEY
+    }).sort({ submittedAt: -1 });
 
     res.json(responses);
   } catch (error) {
