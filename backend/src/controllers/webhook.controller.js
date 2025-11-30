@@ -3,11 +3,6 @@ import { Response } from "../models/response.model.js";
 import { Form } from "../models/form.model.js";
 import { User } from "../models/user.model.js";
 
-// ... imports
-
-// ==================================================================
-// 1. REGISTER WEBHOOK (With Auto-Cleanup)
-// ==================================================================
 export const registerWebhook = async (req, res) => {
   try {
     const { baseId } = req.params;
@@ -58,89 +53,42 @@ export const registerWebhook = async (req, res) => {
   }
 };
 
-// ==================================================================
-// 2. HANDLE WEBHOOK (The Listener)
-// Airtable calls THIS function when data changes.
-// ==================================================================
 export const handleAirtableWebhook = async (req, res) => {
+  const { base: { id: baseId } = {}, webhook: { id: webhookId } = {} } =
+    req.body;
+
+  if (!baseId || !webhookId) return res.sendStatus(200);
+
   try {
-    console.log("🔔 1. Ping Received:", req.body);
-    const baseId = req.body.base?.id;
-    const webhookId = req.body.webhook?.id;
-    if (!baseId || !webhookId) {
-      console.log("❌ Missing Base ID or Webhook ID in payload.");
-      return res.sendStatus(200);
-    }
-    // A. Find a user to act as the fetcher
-    const user = await User.findOne({ accessToken: { $exists: true } });
-    if (!user) {
-      console.log("❌ 2. No User found with access token.");
-      return res.sendStatus(200);
-    }
-    console.log("✅ 2. Found User for Auth:", user.email);
+    const systemUser = await User.findOne({ accessToken: { $exists: true } });
+    if (!systemUser) return res.sendStatus(200);
 
-    // B. Fetch Payload
-    const url = `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`;
-    console.log("🔄 3. Fetching Payload from:", url);
+    const { data } = await axios.get(
+      `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`,
+      { headers: { Authorization: `Bearer ${systemUser.accessToken}` } }
+    );
 
-    const response = await axios.get(url, {
-      headers: { Authorization: `Bearer ${user.accessToken}` },
-    });
+    for (const payload of data.payloads) {
+      if (!payload.changedTablesById) continue;
 
-    const payloads = response.data.payloads;
-    console.log(`📦 4. Payloads Received: ${payloads.length} items`);
-
-    if (payloads.length === 0) {
-      console.log(
-        "⚠️ Payload list is empty. Airtable thinks we already processed this."
-      );
-    }
-
-    // C. Loop through changes
-    for (const payload of payloads) {
-      console.log("🔎 5. Processing Payload Item:", JSON.stringify(payload));
-
-      if (!payload.changedTablesById) {
-        console.log("   -> No table changes in this payload.");
-        continue;
-      }
-
-      for (const tableId in payload.changedTablesById) {
+      Object.keys(payload.changedTablesById).forEach(async (tableId) => {
         const changes = payload.changedTablesById[tableId];
 
-        // CHECK DELETE
         if (changes.destroyedRecordIds) {
-          console.log("   -> Found Destroyed IDs:", changes.destroyedRecordIds);
-          for (const recordId of changes.destroyedRecordIds) {
-            // Debug the DB Find
-            const exists = await Response.findOne({
-              airtableRecordId: recordId,
-            });
-            console.log(
-              `   -> Searching DB for ${recordId}... Found? ${!!exists}`
-            );
-
-            if (exists) {
-              await Response.findOneAndUpdate(
-                { airtableRecordId: recordId },
-                { isDeletedInAirtable: true }
-              );
-              console.log(
-                `🗑️ SUCCESS: Marked ${recordId} as deleted in MongoDB.`
-              );
-            }
-          }
-        } else {
-          console.log("   -> No destroyedRecordIds in this change.");
+          await Response.updateMany(
+            { airtableRecordId: { $in: changes.destroyedRecordIds } },
+            { isDeletedInAirtable: true }
+          );
+          console.log(
+            `Synced: Marked ${changes.destroyedRecordIds.length} records as deleted.`
+          );
         }
-
-        // CHECK UPDATE (omitted for brevity, focus on delete first)
-      }
+      });
     }
 
     res.json({ success: true });
   } catch (error) {
-    console.error("❌ CRITICAL ERROR:", error.response?.data || error.message);
+    console.error("Webhook Sync Error:", error.message);
     res.sendStatus(200);
   }
 };

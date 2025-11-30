@@ -15,9 +15,6 @@ const QuestionSchema = new mongoose.Schema({
     ],
     required: true,
   },
-
-  // ⚠️ THIS IS THE MISSING PIECE ⚠️
-  // Without this line, Mongoose deletes the options before saving!
   options: [String],
 
   required: { type: Boolean, default: false },

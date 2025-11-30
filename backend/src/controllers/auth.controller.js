@@ -3,9 +3,6 @@ import axios from "axios";
 import jwt from "jsonwebtoken";
 import { User } from "../models/user.model.js";
 
-// DELETE THIS LINE: const tempStorage = {};
-
-// 1. LOGIN
 export const login = (req, res) => {
   const state = crypto.randomBytes(16).toString("hex");
   const codeVerifier = crypto.randomBytes(32).toString("base64url");
@@ -14,18 +11,16 @@ export const login = (req, res) => {
     .update(codeVerifier)
     .digest("base64url");
 
-  // --- NEW: SAVE SECRETS TO COOKIES INSTEAD OF RAM ---
   const isProduction = process.env.NODE_ENV === "production";
   const cookieOptions = {
     httpOnly: true,
-    secure: isProduction, // True in Prod, False in Dev
+    secure: isProduction,
     sameSite: isProduction ? "none" : "lax",
-    maxAge: 10 * 60 * 1000, // Expires in 10 minutes
+    maxAge: 10 * 60 * 1000,
   };
 
   res.cookie("oauth_state", state, cookieOptions);
   res.cookie("oauth_verifier", codeVerifier, cookieOptions);
-  // ----------------------------------------------------
 
   const authUrl =
     `https://airtable.com/oauth2/v1/authorize?` +
@@ -42,23 +37,16 @@ export const login = (req, res) => {
   res.redirect(authUrl);
 };
 
-// 2. CALLBACK
 export const callback = async (req, res) => {
   const { code, state } = req.query;
-
-  // --- NEW: RETRIEVE SECRETS FROM COOKIES ---
   const storedState = req.cookies.oauth_state;
   const codeVerifier = req.cookies.oauth_verifier;
 
-  // Validation: Check if cookies match the URL state
   if (!storedState || !codeVerifier || state !== storedState) {
     return res
       .status(400)
-      .send(
-        "Security Error: Invalid state or Session expired. Please try again."
-      );
+      .send("Security Error: Invalid state or Session expired");
   }
-  // ------------------------------------------
 
   try {
     const credentials = Buffer.from(
@@ -82,10 +70,8 @@ export const callback = async (req, res) => {
       }
     );
 
-    // --- NEW: CLEAN UP TEMP COOKIES ---
     res.clearCookie("oauth_state");
     res.clearCookie("oauth_verifier");
-    // ----------------------------------
 
     const { access_token, refresh_token, expires_in } = response.data;
 
@@ -104,7 +90,6 @@ export const callback = async (req, res) => {
       { new: true, upsert: true }
     );
 
-    // Create Session Token
     const token = jwt.sign(
       { userId: user._id, email: user.email },
       process.env.JWT_SECRET,
@@ -112,8 +97,6 @@ export const callback = async (req, res) => {
     );
 
     const isProduction = process.env.NODE_ENV === "production";
-
-    // Set Final Session Cookie
     res.cookie("token", token, {
       httpOnly: true,
       secure: isProduction,
@@ -128,7 +111,6 @@ export const callback = async (req, res) => {
   }
 };
 
-// ... logout and checkAuth remain the same
 export const logout = (req, res) => {
   res.clearCookie("token");
   res.status(200).json({ message: "Logged out successfully" });

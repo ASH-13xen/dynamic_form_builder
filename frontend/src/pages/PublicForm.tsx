@@ -29,7 +29,6 @@ export default function PublicForm() {
     setAnswers((prev) => ({ ...prev, [qKey]: value }));
   };
 
-  // --- SPECIAL HANDLER FOR MULTI-SELECT (CHECKBOXES) ---
   const handleMultiSelectChange = (
     qKey: string,
     option: string,
@@ -38,10 +37,8 @@ export default function PublicForm() {
     setAnswers((prev) => {
       const currentArray = prev[qKey] || [];
       if (isChecked) {
-        // Add option if not exists
         return { ...prev, [qKey]: [...currentArray, option] };
       } else {
-        // Remove option
         return {
           ...prev,
           [qKey]: currentArray.filter((item: string) => item !== option),
@@ -59,12 +56,9 @@ export default function PublicForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Remove File objects for now (Airtable API limitation without S3)
-    // We filter the answers to only send text/numbers/arrays
     const cleanAnswers: Record<string, any> = {};
     Object.keys(answers).forEach((key) => {
       const val = answers[key];
-      // Skip file lists for API submission
       if (val instanceof FileList) return;
       cleanAnswers[key] = val;
     });
@@ -75,7 +69,6 @@ export default function PublicForm() {
       });
 
       alert("Application Submitted Successfully!");
-      // Optional: Refresh page or redirect
       window.location.reload();
     } catch (err) {
       console.error(err);
@@ -85,24 +78,25 @@ export default function PublicForm() {
 
   if (loading)
     return (
-      <div className="h-screen flex items-center justify-center">
+      <div className="h-screen flex items-center justify-center bg-white text-black">
         <Loader2 className="animate-spin" />
       </div>
     );
   if (error)
-    return <div className="p-10 text-center text-red-500">{error}</div>;
+    return (
+      <div className="p-10 text-center text-red-500 font-sans">{error}</div>
+    );
 
   return (
-    <div className="min-h-screen bg-gray-100 py-10 px-4">
-      <Card className="max-w-2xl mx-auto shadow-lg">
-        <CardHeader className="bg-blue-600 text-white rounded-t-lg">
+    <div className="min-h-screen bg-white py-10 px-4 font-sans text-black">
+      <Card className="max-w-2xl mx-auto border border-black shadow-none rounded-none">
+        <CardHeader className="bg-black text-white rounded-none">
           <CardTitle className="text-2xl">{form.title}</CardTitle>
         </CardHeader>
 
         <CardContent className="p-6">
           <form onSubmit={handleSubmit} className="space-y-8">
             {form.questions.map((q: any) => {
-              // 1. Run Logic
               const isVisible = shouldShowQuestion(q.conditionalRules, answers);
               if (!isVisible) return null;
 
@@ -111,41 +105,38 @@ export default function PublicForm() {
                   key={q.questionKey}
                   className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300"
                 >
-                  <label className="block text-sm font-bold text-gray-800">
+                  <label className="block text-sm font-bold text-black uppercase tracking-wide">
                     {q.label}{" "}
                     {q.required && <span className="text-red-500">*</span>}
                   </label>
 
-                  {/* --- RENDER BASED ON TYPE --- */}
-
-                  {/* TYPE: TEXT / URL / EMAIL */}
                   {(q.type === "singleLineText" ||
                     q.type === "url" ||
                     q.type === "email") && (
                     <Input
                       required={q.required}
-                      placeholder="Type your answer..."
+                      placeholder="Type here..."
+                      className="border-black rounded-none focus-visible:ring-black"
                       onChange={(e) =>
                         handleChange(q.questionKey, e.target.value)
                       }
                     />
                   )}
 
-                  {/* TYPE: LONG TEXT */}
                   {q.type === "multilineText" && (
                     <Textarea
                       required={q.required}
                       rows={4}
+                      className="border-black rounded-none focus-visible:ring-black"
                       onChange={(e) =>
                         handleChange(q.questionKey, e.target.value)
                       }
                     />
                   )}
 
-                  {/* TYPE: SINGLE SELECT (Dropdown) */}
                   {q.type === "singleSelect" && (
                     <select
-                      className="w-full p-2.5 border rounded-md bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      className="w-full p-2.5 border border-black rounded-none bg-white focus:ring-1 focus:ring-black outline-none"
                       required={q.required}
                       onChange={(e) =>
                         handleChange(q.questionKey, e.target.value)
@@ -163,17 +154,16 @@ export default function PublicForm() {
                     </select>
                   )}
 
-                  {/* TYPE: MULTI SELECT (Checkboxes) - NEW! */}
                   {q.type === "multipleSelects" && (
-                    <div className="space-y-2 border p-3 rounded-md bg-gray-50/50">
+                    <div className="space-y-2 border border-black p-3 rounded-none bg-white">
                       {q.options?.map((opt: string) => (
                         <label
                           key={opt}
-                          className="flex items-center space-x-3 cursor-pointer hover:bg-gray-100 p-1 rounded"
+                          className="flex items-center space-x-3 cursor-pointer hover:bg-gray-50 p-1"
                         >
                           <input
                             type="checkbox"
-                            className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+                            className="h-4 w-4 text-black rounded-none border-black focus:ring-black accent-black"
                             onChange={(e) =>
                               handleMultiSelectChange(
                                 q.questionKey,
@@ -182,13 +172,12 @@ export default function PublicForm() {
                               )
                             }
                           />
-                          <span className="text-sm text-gray-700">{opt}</span>
+                          <span className="text-sm text-black">{opt}</span>
                         </label>
                       ))}
                     </div>
                   )}
 
-                  {/* TYPE: FILE UPLOAD */}
                   {q.type === "multipleAttachments" && (
                     <Input
                       type="file"
@@ -197,17 +186,17 @@ export default function PublicForm() {
                       onChange={(e) =>
                         handleFileChange(q.questionKey, e.target.files)
                       }
-                      className="cursor-pointer file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                      className="cursor-pointer file:mr-4 file:py-2 file:px-4 file:border-0 file:text-sm file:font-semibold file:bg-black file:text-white hover:file:bg-gray-800 border-black rounded-none"
                     />
                   )}
                 </div>
               );
             })}
 
-            <div className="pt-6 border-t">
+            <div className="pt-6 border-t border-black">
               <Button
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-lg h-12 shadow-md"
+                className="w-full bg-black text-white hover:bg-gray-800 text-lg h-12 shadow-none rounded-none uppercase font-bold tracking-wider"
               >
                 Submit Application
               </Button>

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -17,65 +16,38 @@ import {
 } from "lucide-react";
 import axios from "axios";
 
-// --- TYPES ---
-interface FormQuestion {
-  questionKey: string;
-  airtableFieldId: string;
-  label: string;
-  type: string;
-  options?: string[];
-  required: boolean;
-  conditionalRules: {
-    logic: "AND" | "OR";
-    conditions: {
-      questionKey: string;
-      operator: "equals" | "notEquals" | "contains";
-      value: string;
-    }[];
-  } | null;
-}
-
 const CreateForm = () => {
   const navigate = useNavigate();
-
-  // STEP 1 STATE
   const [step, setStep] = useState(1);
-  const [bases, setBases] = useState<any[]>([]);
-  const [tables, setTables] = useState<any[]>([]);
-  const [selectedBaseId, setSelectedBaseId] = useState("");
-  const [selectedTableId, setSelectedTableId] = useState("");
-  const [availableFields, setAvailableFields] = useState<any[]>([]);
+  const [data, setData] = useState({ bases: [], tables: [], fields: [] });
+  const [selection, setSelection] = useState({ baseId: "", tableId: "" });
+  const [form, setForm] = useState({
+    title: "Untitled Form",
+    questions: [] as any[],
+  });
+  const [logic, setLogic] = useState({
+    isOpen: false,
+    qIndex: null as number | null,
+    conditions: [] as any[],
+    gate: "AND" as "AND" | "OR",
+  });
 
-  // STEP 2 STATE
-  const [formTitle, setFormTitle] = useState("Untitled Form");
-  const [questions, setQuestions] = useState<FormQuestion[]>([]);
-
-  // LOGIC MODAL STATE
-  const [logicModalOpen, setLogicModalOpen] = useState(false);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<
-    number | null
-  >(null);
-  const [tempConditions, setTempConditions] = useState<any[]>([]);
-  const [tempLogicGate, setTempLogicGate] = useState<"AND" | "OR">("AND");
-
-  // --- INITIAL DATA FETCH ---
   useEffect(() => {
     axios
       .get("/api/forms/bases")
-      .then((res) => setBases(res.data))
+      .then((res) => setData((prev) => ({ ...prev, bases: res.data })))
       .catch(console.error);
   }, []);
 
   const handleBaseChange = async (baseId: string) => {
-    setSelectedBaseId(baseId);
-    setTables([]);
+    setSelection({ baseId, tableId: "" });
     if (!baseId) return;
     const res = await axios.get(`/api/forms/tables/${baseId}`);
-    setTables(res.data);
+    setData((prev) => ({ ...prev, tables: res.data }));
   };
 
   const handleNext = () => {
-    const table = tables.find((t) => t.id === selectedTableId);
+    const table: any = data.tables.find((t: any) => t.id === selection.tableId);
     if (!table) return;
     const allowed = [
       "singleLineText",
@@ -87,143 +59,130 @@ const CreateForm = () => {
       "email",
       "phoneNumber",
     ];
-    const filtered = table.fields.filter((f: any) => allowed.includes(f.type));
-    setAvailableFields(filtered);
+    setData((prev) => ({
+      ...prev,
+      fields: table.fields.filter((f: any) => allowed.includes(f.type)),
+    }));
     setStep(2);
   };
 
   const addField = (field: any) => {
-    let mappedType = field.type;
-    if (["url", "email", "phoneNumber", "singleLineText"].includes(field.type))
-      mappedType = "singleLineText";
-    else if (field.type === "multilineText") mappedType = "multilineText";
-    else if (field.type === "multipleAttachments")
-      mappedType = "multipleAttachments";
-    else if (field.type === "singleSelect") mappedType = "singleSelect";
-    else if (field.type === "multipleSelects") mappedType = "multipleSelects";
-    else mappedType = "singleLineText";
+    const typeMap: any = {
+      url: "singleLineText",
+      email: "singleLineText",
+      phoneNumber: "singleLineText",
+    };
+    const type =
+      typeMap[field.type] ||
+      ([
+        "multilineText",
+        "multipleAttachments",
+        "singleSelect",
+        "multipleSelects",
+      ].includes(field.type)
+        ? field.type
+        : "singleLineText");
 
-    let extractedOptions: string[] = [];
-    if (field.options?.choices)
-      extractedOptions = field.options.choices.map((c: any) => c.name);
-
-    setQuestions([
-      ...questions,
-      {
-        questionKey: crypto.randomUUID(),
-        airtableFieldId: field.id,
-        label: field.name,
-        type: mappedType,
-        required: false,
-        options: extractedOptions,
-        conditionalRules: null,
-      },
-    ]);
+    setForm((prev) => ({
+      ...prev,
+      questions: [
+        ...prev.questions,
+        {
+          questionKey: crypto.randomUUID(),
+          airtableFieldId: field.id,
+          label: field.name,
+          type,
+          required: false,
+          options: field.options?.choices?.map((c: any) => c.name) || [],
+          conditionalRules: null,
+        },
+      ],
+    }));
   };
 
-  const updateQuestion = (index: number, updates: Partial<FormQuestion>) => {
-    const newQs = [...questions];
-    newQs[index] = { ...newQs[index], ...updates };
-    setQuestions(newQs);
+  const updateQ = (idx: number, updates: any) => {
+    const qs = [...form.questions];
+    qs[idx] = { ...qs[idx], ...updates };
+    setForm((prev) => ({ ...prev, questions: qs }));
   };
 
-  // --- LOGIC MODAL HANDLERS ---
-  const openLogicModal = (index: number) => {
-    setCurrentQuestionIndex(index);
-    const q = questions[index];
-    if (q.conditionalRules) {
-      setTempConditions(q.conditionalRules.conditions);
-      setTempLogicGate(q.conditionalRules.logic);
-    } else {
-      setTempConditions([]);
-      setTempLogicGate("AND");
-    }
-    setLogicModalOpen(true);
+  const openLogic = (idx: number) => {
+    const q = form.questions[idx];
+    setLogic({
+      isOpen: true,
+      qIndex: idx,
+      conditions: q.conditionalRules?.conditions || [],
+      gate: q.conditionalRules?.logic || "AND",
+    });
   };
 
   const saveLogic = () => {
-    if (currentQuestionIndex === null) return;
-
-    let newRules = null;
-    if (tempConditions.length > 0) {
-      newRules = {
-        logic: tempLogicGate,
-        conditions: tempConditions,
-      };
-    }
-
-    updateQuestion(currentQuestionIndex, { conditionalRules: newRules });
-    setLogicModalOpen(false);
-  };
-
-  const addCondition = () => {
-    // Default condition
-    setTempConditions([
-      ...tempConditions,
-      { questionKey: "", operator: "equals", value: "" },
-    ]);
-  };
-
-  const updateCondition = (idx: number, field: string, value: any) => {
-    const newConds = [...tempConditions];
-    newConds[idx] = { ...newConds[idx], [field]: value };
-    setTempConditions(newConds);
-  };
-
-  const removeCondition = (idx: number) => {
-    setTempConditions(tempConditions.filter((_, i) => i !== idx));
+    if (logic.qIndex === null) return;
+    updateQ(logic.qIndex, {
+      conditionalRules:
+        logic.conditions.length > 0
+          ? { logic: logic.gate, conditions: logic.conditions }
+          : null,
+    });
+    setLogic((prev) => ({ ...prev, isOpen: false }));
   };
 
   const handleSave = async () => {
-    if (!formTitle || questions.length === 0) return alert("Add fields first.");
+    if (!form.title || form.questions.length === 0)
+      return alert("Add fields first.");
     try {
       await axios.post("/api/forms", {
-        baseId: selectedBaseId,
-        tableId: selectedTableId,
-        title: formTitle,
-        questions: questions,
+        baseId: selection.baseId,
+        tableId: selection.tableId,
+        title: form.title,
+        questions: form.questions,
       });
-      alert("Form Saved Successfully!");
+      alert("Saved!");
       navigate("/dashboard");
-    } catch (error) {
-      alert("Failed to save form.");
+    } catch {
+      alert("Failed to save.");
     }
   };
 
-  // --- RENDER STEP 1 ---
-  if (step === 1) {
+  if (step === 1)
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <Card className="w-full max-w-2xl">
+      <div className="min-h-screen bg-white flex items-center justify-center p-4 font-sans text-black">
+        <Card className="w-full max-w-2xl border border-black shadow-none rounded-none">
           <CardHeader>
-            <CardTitle>Step 1: Connect Data Source</CardTitle>
+            <CardTitle>Step 1: Connect Data</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <select
-              className="w-full p-2 border rounded"
+              className="w-full p-2 border border-black rounded-none"
               onChange={(e) => handleBaseChange(e.target.value)}
             >
               <option value="">-- Choose Base --</option>
-              {bases.map((b) => (
+              {data.bases.map((b: any) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
               ))}
             </select>
             <select
-              className="w-full p-2 border rounded"
-              disabled={!selectedBaseId}
-              onChange={(e) => setSelectedTableId(e.target.value)}
+              className="w-full p-2 border border-black rounded-none"
+              disabled={!selection.baseId}
+              onChange={(e) =>
+                setSelection((prev) => ({ ...prev, tableId: e.target.value }))
+              }
             >
               <option value="">-- Choose Table --</option>
-              {tables.map((t) => (
+              {data.tables.map((t: any) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
                 </option>
               ))}
             </select>
             <div className="flex justify-end pt-4">
-              <Button onClick={handleNext} disabled={!selectedTableId}>
+              <Button
+                onClick={handleNext}
+                disabled={!selection.tableId}
+                className="bg-black text-white hover:bg-gray-800 rounded-none"
+              >
                 Next Step <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
@@ -231,106 +190,104 @@ const CreateForm = () => {
         </Card>
       </div>
     );
-  }
 
-  // --- RENDER STEP 2 ---
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col relative">
-      <header className="bg-white border-b p-4 flex justify-between sticky top-0 z-10">
+    <div className="min-h-screen bg-white flex flex-col font-sans text-black">
+      <header className="bg-white border-b border-black p-4 flex justify-between sticky top-0 z-10">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={() => setStep(1)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setStep(1)}
+            className="rounded-none"
+          >
             <ArrowLeft className="mr-2 h-4 w-4" /> Back
           </Button>
           <Input
-            className="text-lg font-bold w-64"
-            value={formTitle}
-            onChange={(e) => setFormTitle(e.target.value)}
+            className="text-lg font-bold w-64 border-none shadow-none rounded-none"
+            value={form.title}
+            onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
           />
         </div>
         <Button
           onClick={handleSave}
-          className="bg-green-600 hover:bg-green-700"
+          className="bg-black text-white hover:bg-gray-800 rounded-none"
         >
           <Save className="mr-2 h-4 w-4" /> Save Form
         </Button>
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-80 bg-white border-r p-4 overflow-y-auto">
-          <h3 className="font-semibold text-gray-500 mb-4 text-xs uppercase">
-            Available Fields
-          </h3>
+        <aside className="w-80 border-r border-black p-4 overflow-y-auto">
+          <h3 className="font-bold mb-4 text-xs uppercase">Fields</h3>
           <div className="space-y-2">
-            {availableFields.map((field) => {
-              const isAdded = questions.some(
-                (q) => q.airtableFieldId === field.id
-              );
-              return (
-                <div
-                  key={field.id}
-                  className="flex justify-between p-3 bg-gray-50 border rounded hover:border-blue-300"
+            {data.fields.map((f: any) => (
+              <div
+                key={f.id}
+                className="flex justify-between p-3 border border-black rounded-none hover:bg-gray-50"
+              >
+                <span className="text-sm truncate w-40">{f.name}</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={form.questions.some(
+                    (q) => q.airtableFieldId === f.id
+                  )}
+                  onClick={() => addField(f)}
                 >
-                  <span className="text-sm truncate w-40">{field.name}</span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={isAdded}
-                    onClick={() => addField(field)}
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </div>
-              );
-            })}
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
           </div>
         </aside>
 
         <main className="flex-1 p-8 overflow-y-auto">
           <div className="max-w-2xl mx-auto space-y-4">
-            {questions.map((q, idx) => (
+            {form.questions.map((q, idx) => (
               <Card
                 key={q.questionKey}
-                className="border-l-4 border-l-blue-500 shadow-sm"
+                className="border border-black shadow-none rounded-none"
               >
                 <CardContent className="p-4 space-y-4">
                   <div className="flex justify-between items-center">
                     <Input
                       value={q.label}
-                      onChange={(e) =>
-                        updateQuestion(idx, { label: e.target.value })
-                      }
-                      className="font-medium"
+                      onChange={(e) => updateQ(idx, { label: e.target.value })}
+                      className="font-medium border-black rounded-none"
                     />
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="text-red-400"
                       onClick={() =>
-                        setQuestions(questions.filter((_, i) => i !== idx))
+                        setForm((p) => ({
+                          ...p,
+                          questions: p.questions.filter((_, i) => i !== idx),
+                        }))
                       }
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
-
-                  <div className="flex items-center justify-between border-t pt-3">
+                  <div className="flex items-center justify-between border-t border-gray-200 pt-3">
                     <div className="flex items-center gap-2">
                       <Switch
                         checked={q.required}
-                        onCheckedChange={(c) =>
-                          updateQuestion(idx, { required: c })
-                        }
+                        onCheckedChange={(c) => updateQ(idx, { required: c })}
                       />
-                      <span className="text-sm text-gray-600">Required</span>
+                      <span className="text-sm">Required</span>
                     </div>
-
                     <Button
-                      variant={q.conditionalRules ? "secondary" : "ghost"}
+                      variant="ghost"
                       size="sm"
-                      onClick={() => openLogicModal(idx)}
-                      className="text-xs"
+                      onClick={() => openLogic(idx)}
+                      className={`text-xs border rounded-none ${
+                        q.conditionalRules
+                          ? "bg-black text-white"
+                          : "border-black"
+                      }`}
                     >
-                      <GitMerge className="h-3 w-3 mr-1" />
+                      <GitMerge className="h-3 w-3 mr-1" />{" "}
                       {q.conditionalRules ? "Logic Active" : "Add Logic"}
                     </Button>
                   </div>
@@ -341,81 +298,75 @@ const CreateForm = () => {
         </main>
       </div>
 
-      {/* --- LOGIC EDITOR MODAL --- */}
-      {logicModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="w-[600px] shadow-2xl">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
+      {logic.isOpen && (
+        <div className="fixed inset-0 bg-white/90 flex items-center justify-center z-50">
+          <Card className="w-[600px] border border-black shadow-none rounded-none bg-white">
+            <CardHeader className="flex flex-row justify-between pb-2 border-b border-black">
               <CardTitle>Conditional Logic</CardTitle>
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => setLogicModalOpen(false)}
+                onClick={() => setLogic((p) => ({ ...p, isOpen: false }))}
               >
                 <X className="h-4 w-4" />
               </Button>
             </CardHeader>
-            <CardContent className="space-y-4 max-h-[60vh] overflow-y-auto">
-              <p className="text-sm text-gray-500">
-                Show "
-                <strong>
-                  {currentQuestionIndex !== null &&
-                    questions[currentQuestionIndex].label}
-                </strong>
-                " only if:
+            <CardContent className="space-y-4 max-h-[60vh] overflow-y-auto pt-4">
+              <p className="text-sm">
+                Show "<strong>{form.questions[logic.qIndex!]?.label}</strong>"
+                only if:
               </p>
-
-              {tempConditions.map((cond, cIdx) => (
+              {logic.conditions.map((cond, cIdx) => (
                 <div
                   key={cIdx}
-                  className="flex gap-2 items-center bg-gray-50 p-2 rounded"
+                  className="flex gap-2 items-center border border-gray-200 p-2"
                 >
-                  {/* 1. SELECT TRIGGER QUESTION */}
                   <select
-                    className="flex-1 p-2 border rounded text-sm"
+                    className="flex-1 p-2 border border-black text-sm"
                     value={cond.questionKey}
-                    onChange={(e) =>
-                      updateCondition(cIdx, "questionKey", e.target.value)
-                    }
+                    onChange={(e) => {
+                      const newC = [...logic.conditions];
+                      newC[cIdx].questionKey = e.target.value;
+                      setLogic((p) => ({ ...p, conditions: newC }));
+                    }}
                   >
                     <option value="">Select Field...</option>
-                    {/* Only show questions that come BEFORE this one to prevent loops */}
-                    {questions.map((q) => (
+                    {form.questions.map((q) => (
                       <option key={q.questionKey} value={q.questionKey}>
                         {q.label}
                       </option>
                     ))}
                   </select>
-
-                  {/* 2. OPERATOR */}
                   <select
-                    className="w-24 p-2 border rounded text-sm"
+                    className="w-24 p-2 border border-black text-sm"
                     value={cond.operator}
-                    onChange={(e) =>
-                      updateCondition(cIdx, "operator", e.target.value)
-                    }
+                    onChange={(e) => {
+                      const newC = [...logic.conditions];
+                      newC[cIdx].operator = e.target.value;
+                      setLogic((p) => ({ ...p, conditions: newC }));
+                    }}
                   >
                     <option value="equals">Equals</option>
                     <option value="notEquals">Not Equal</option>
                     <option value="contains">Contains</option>
                   </select>
-
-                  {/* 3. VALUE INPUT (Smart Switch) */}
                   {(() => {
-                    const triggerQ = questions.find(
+                    const triggerQ = form.questions.find(
                       (q) => q.questionKey === cond.questionKey
                     );
                     if (triggerQ?.options && triggerQ.options.length > 0) {
                       return (
                         <select
-                          className="flex-1 p-2 border rounded text-sm"
+                          className="flex-1 p-2 border border-black text-sm"
                           value={cond.value}
-                          onChange={(e) =>
-                            updateCondition(cIdx, "value", e.target.value)
-                          }
+                          onChange={(e) => {
+                            const newC = [...logic.conditions];
+                            newC[cIdx].value = e.target.value;
+                            setLogic((p) => ({ ...p, conditions: newC }));
+                          }}
                         >
                           <option value="">Select Value...</option>
-                          {triggerQ.options.map((opt) => (
+                          {triggerQ.options.map((opt: any) => (
                             <option key={opt} value={opt}>
                               {opt}
                             </option>
@@ -425,65 +376,81 @@ const CreateForm = () => {
                     }
                     return (
                       <Input
-                        className="flex-1 h-9 text-sm"
+                        className="flex-1 h-9 text-sm border-black rounded-none"
                         placeholder="Value..."
                         value={cond.value}
-                        onChange={(e) =>
-                          updateCondition(cIdx, "value", e.target.value)
-                        }
+                        onChange={(e) => {
+                          const newC = [...logic.conditions];
+                          newC[cIdx].value = e.target.value;
+                          setLogic((p) => ({ ...p, conditions: newC }));
+                        }}
                       />
                     );
                   })()}
-
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="text-red-400"
-                    onClick={() => removeCondition(cIdx)}
+                    onClick={() =>
+                      setLogic((p) => ({
+                        ...p,
+                        conditions: p.conditions.filter((_, i) => i !== cIdx),
+                      }))
+                    }
                   >
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </div>
               ))}
-
               <Button
                 variant="outline"
                 size="sm"
-                className="w-full border-dashed"
-                onClick={addCondition}
+                className="w-full border-dashed border-black rounded-none"
+                onClick={() =>
+                  setLogic((p) => ({
+                    ...p,
+                    conditions: [
+                      ...p.conditions,
+                      { questionKey: "", operator: "equals", value: "" },
+                    ],
+                  }))
+                }
               >
                 <Plus className="h-3 w-3 mr-2" /> Add Condition
               </Button>
-
-              {tempConditions.length > 1 && (
-                <div className="flex items-center gap-2 pt-2 border-t">
-                  <span className="text-sm">Logic Operator:</span>
-                  <div className="flex gap-1 bg-gray-100 p-1 rounded">
-                    {["AND", "OR"].map((op) => (
-                      <button
-                        key={op}
-                        onClick={() => setTempLogicGate(op as "AND" | "OR")}
-                        className={`px-3 py-1 text-xs rounded ${
-                          tempLogicGate === op
-                            ? "bg-white shadow text-blue-600 font-bold"
-                            : "text-gray-500"
-                        }`}
-                      >
-                        {op}
-                      </button>
-                    ))}
-                  </div>
+              {logic.conditions.length > 1 && (
+                <div className="flex gap-1 border border-black p-1 w-fit">
+                  {["AND", "OR"].map((op) => (
+                    <button
+                      key={op}
+                      onClick={() =>
+                        setLogic((p) => ({ ...p, gate: op as any }))
+                      }
+                      className={`px-3 py-1 text-xs ${
+                        logic.gate === op
+                          ? "bg-black text-white"
+                          : "text-gray-500"
+                      }`}
+                    >
+                      {op}
+                    </button>
+                  ))}
                 </div>
               )}
             </CardContent>
-            <div className="p-4 border-t flex justify-end gap-2">
+            <div className="p-4 border-t border-black flex justify-end gap-2">
               <Button
                 variant="outline"
-                onClick={() => setLogicModalOpen(false)}
+                onClick={() => setLogic((p) => ({ ...p, isOpen: false }))}
+                className="border-black rounded-none"
               >
                 Cancel
               </Button>
-              <Button onClick={saveLogic}>Save Logic</Button>
+              <Button
+                onClick={saveLogic}
+                className="bg-black text-white rounded-none"
+              >
+                Save Logic
+              </Button>
             </div>
           </Card>
         </div>

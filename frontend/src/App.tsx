@@ -3,7 +3,7 @@ import Login from "./pages/Login";
 import HomePage from "./pages/HomePage";
 import CreateForm from "./pages/CreateForm";
 import PublicForm from "./pages/PublicForm";
-import ResponseList from "./pages/ResponseList"; // <--- 1. Import this
+import ResponseList from "./pages/ResponseList";
 
 function App() {
   return (

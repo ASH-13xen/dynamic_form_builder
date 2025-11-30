@@ -17,11 +17,9 @@ export default function ResponseList() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // 1. Fetch Form Schema (To get Question Labels)
         const formRes = await axios.get(`/api/forms/${formId}`);
         setForm(formRes.data);
 
-        // 2. Fetch Actual Responses
         const responseRes = await axios.get(`/api/forms/${formId}/responses`);
         setResponses(responseRes.data);
       } catch (error) {
@@ -36,54 +34,64 @@ export default function ResponseList() {
 
   if (loading)
     return (
-      <div className="h-screen flex items-center justify-center">
-        <Loader2 className="animate-spin text-blue-600" />
+      <div className="h-screen flex items-center justify-center bg-white text-black font-sans">
+        <Loader2 className="animate-spin" />
       </div>
     );
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
-      {/* HEADER */}
-      <div className="max-w-6xl mx-auto mb-6 flex justify-between items-center">
+    <div className="min-h-screen bg-white p-8 font-sans text-black">
+      <div className="max-w-6xl mx-auto mb-8 flex justify-between items-center border-b border-black pb-4">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" onClick={() => navigate("/dashboard")}>
+          <Button
+            variant="ghost"
+            onClick={() => navigate("/dashboard")}
+            className="hover:bg-gray-100 rounded-none text-black px-0"
+          >
             <ArrowLeft className="mr-2 h-4 w-4" /> Back
           </Button>
-          <h1 className="text-2xl font-bold text-gray-900">
-            Responses: <span className="text-blue-600">{form?.title}</span>
+          <h1 className="text-2xl font-bold">
+            Responses: <span className="font-normal">{form?.title}</span>
           </h1>
         </div>
-        <div className="bg-white px-4 py-2 rounded border shadow-sm text-sm">
-          Total Responses: <strong>{responses.length}</strong>
+        <div className="border border-black px-4 py-2 text-sm font-medium">
+          Total: {responses.length}
         </div>
       </div>
 
-      {/* DATA TABLE */}
-      <Card className="max-w-6xl mx-auto overflow-hidden">
+      <Card className="max-w-6xl mx-auto border border-black shadow-none rounded-none">
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
-              <thead className="bg-gray-100 text-gray-700 uppercase font-medium border-b">
+              <thead className="bg-black text-white uppercase font-bold text-xs">
                 <tr>
-                  <th className="px-6 py-4 whitespace-nowrap">#</th>
-                  <th className="px-6 py-4 whitespace-nowrap">Submitted At</th>
+                  <th className="px-6 py-4 whitespace-nowrap border-b border-white/20">
+                    #
+                  </th>
+                  <th className="px-6 py-4 whitespace-nowrap border-b border-white/20">
+                    Submitted At
+                  </th>
 
-                  {/* DYNAMIC HEADERS: Loop through Form Questions to show Labels */}
                   {form?.questions.map((q: any) => (
-                    <th key={q.questionKey} className="px-6 py-4 min-w-[150px]">
+                    <th
+                      key={q.questionKey}
+                      className="px-6 py-4 min-w-[150px] border-b border-white/20"
+                    >
                       {q.label}
                     </th>
                   ))}
 
-                  <th className="px-6 py-4 whitespace-nowrap">Airtable ID</th>
+                  <th className="px-6 py-4 whitespace-nowrap border-b border-white/20">
+                    Airtable ID
+                  </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-200 bg-white">
+              <tbody className="divide-y divide-black/10 bg-white">
                 {responses.length === 0 ? (
                   <tr>
                     <td
                       colSpan={10}
-                      className="px-6 py-12 text-center text-gray-400"
+                      className="px-6 py-12 text-center text-gray-500 font-medium"
                     >
                       No responses yet.
                     </td>
@@ -94,18 +102,15 @@ export default function ResponseList() {
                       key={resp._id}
                       className="hover:bg-gray-50 transition-colors"
                     >
-                      <td className="px-6 py-4 font-medium text-gray-900">
+                      <td className="px-6 py-4 font-bold border-r border-gray-100">
                         {idx + 1}
                       </td>
-                      <td className="px-6 py-4 text-gray-500">
+                      <td className="px-6 py-4 border-r border-gray-100 font-mono text-xs text-gray-600">
                         {new Date(resp.submittedAt).toLocaleString()}
                       </td>
 
-                      {/* DYNAMIC CELLS: Match Question Key to Answer */}
                       {form?.questions.map((q: any) => {
                         const answer = resp.answers[q.questionKey];
-
-                        // Handle Arrays (Multi-select)
                         const displayValue = Array.isArray(answer)
                           ? answer.join(", ")
                           : String(answer || "-");
@@ -113,7 +118,7 @@ export default function ResponseList() {
                         return (
                           <td
                             key={q.questionKey}
-                            className="px-6 py-4 text-gray-700 truncate max-w-[200px]"
+                            className="px-6 py-4 text-black border-r border-gray-100 truncate max-w-[200px]"
                             title={displayValue}
                           >
                             {displayValue}

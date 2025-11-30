@@ -9,7 +9,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { AlertCircle, ArrowRight } from "lucide-react";
 
 const Login = () => {
   const [searchParams] = useSearchParams();
@@ -23,59 +22,38 @@ const Login = () => {
   }, [searchParams]);
 
   const handleLogin = () => {
-    // 1. Get the Backend URL from Environment Variables
-    // If running locally, it falls back to localhost:5000
-    // If on Vercel, it uses the VITE_API_URL you set in settings
     const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
-
-    // 2. Redirect to the Backend Auth Route
     window.location.href = `${API_URL}/api/auth/login`;
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-      <Card className="w-full max-w-md shadow-lg">
-        <CardHeader className="text-center">
-          <div className="mx-auto mb-4 bg-blue-100 p-3 rounded-full w-16 h-16 flex items-center justify-center">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              className="w-8 h-8 text-blue-600"
-            >
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="16" y1="13" x2="8" y2="13" />
-              <line x1="16" y1="17" x2="8" y2="17" />
-              <polyline points="10 9 9 9 8 9" />
-            </svg>
-          </div>
-          <CardTitle className="text-2xl font-bold text-gray-900">
+    <div className="min-h-screen bg-white flex items-center justify-center p-4 font-sans text-black">
+      <Card className="w-full max-w-sm border border-black shadow-none rounded-none">
+        <CardHeader className="text-center pb-2">
+          <CardTitle className="text-2xl font-bold tracking-tight">
             Form Builder
           </CardTitle>
-          <CardDescription>
-            Create dynamic forms powered by your Airtable data.
+          <CardDescription className="text-gray-500 text-sm mt-1">
+            Connect your Airtable account to start.
           </CardDescription>
         </CardHeader>
 
-        <CardContent>
+        <CardContent className="pt-4">
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md flex items-center gap-2 text-red-700 text-sm">
-              <AlertCircle size={16} />
+            <div className="mb-4 p-3 border border-red-500 bg-red-50 text-red-700 text-sm text-center">
               {error}
             </div>
           )}
 
           <Button
-            className="w-full h-12 text-lg bg-blue-600 hover:bg-blue-700"
+            className="w-full h-10 text-sm font-medium bg-black text-white hover:bg-gray-800 rounded-none transition-colors"
             onClick={handleLogin}
           >
-            Login with Airtable <ArrowRight className="ml-2 h-5 w-5" />
+            Login with Airtable
           </Button>
 
           <p className="mt-4 text-xs text-center text-gray-400">
-            You will be redirected to Airtable to authorize access.
+            You will be redirected to authorize access.
           </p>
         </CardContent>
       </Card>

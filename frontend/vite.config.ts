@@ -13,8 +13,6 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      // ⚠️ THIS IS THE MAGIC PART
-      // It tells Vite: "If you see a request starting with /api, send it to Port 5000"
       "/api": {
         target: "http://localhost:5000",
         changeOrigin: true,
