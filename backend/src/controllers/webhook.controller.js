@@ -10,9 +10,6 @@ export const registerWebhook = async (req, res) => {
     const webhookUrl = `${process.env.AIRTABLE_WEBHOOK_URL}/api/webhooks/airtable`;
 
     const headers = { Authorization: `Bearer ${user.accessToken}` };
-
-    // --- STEP A: List Existing Webhooks ---
-    // We check if we hit the limit so we can clear space
     const listUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks`;
     const listRes = await axios.get(listUrl, { headers });
 
@@ -21,14 +18,11 @@ export const registerWebhook = async (req, res) => {
       `Found ${existingHooks.length} existing webhooks. Cleaning up...`
     );
 
-    // --- STEP B: Delete Old Webhooks ---
-    // We loop through and delete them to free up slots
     for (const hook of existingHooks) {
       await axios.delete(`${listUrl}/${hook.id}`, { headers });
       console.log(`Deleted old webhook: ${hook.id}`);
     }
 
-    // --- STEP C: Register New Webhook ---
     const response = await axios.post(
       listUrl,
       {
