@@ -61,7 +61,6 @@ const HomePage = () => {
 
   return (
     <div className="min-h-screen bg-white p-8 font-sans text-black">
-      {/* HEADER */}
       <header className="max-w-4xl mx-auto flex justify-between items-center mb-12 border-b pb-4 border-black">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
@@ -83,7 +82,6 @@ const HomePage = () => {
           </div>
         )}
 
-        {/* CREATE SECTION */}
         <div className="mb-10">
           <Button
             onClick={() => navigate("/create")}
@@ -93,7 +91,6 @@ const HomePage = () => {
           </Button>
         </div>
 
-        {/* FORMS LIST */}
         <section>
           <h2 className="text-xl font-bold mb-6 border-b border-black pb-2 inline-block">
             Your Forms ({forms.length})
