@@ -48,26 +48,38 @@ export const registerWebhook = async (req, res) => {
 };
 
 const refreshAirtableToken = async (refreshToken) => {
-  // --- Implementation placeholder ---
-  // In a real application, this would make a POST request to the Airtable token endpoint:
+  // 1. Prepare the request data as URLSearchParams (form data)
+  const data = new URLSearchParams();
+  data.append("grant_type", "refresh_token");
+  data.append("refresh_token", refreshToken);
+  data.append("client_id", process.env.AIRTABLE_CLIENT_ID);
+  data.append("client_secret", process.env.AIRTABLE_CLIENT_SECRET);
 
-  const response = await axios.post(
-    "https://api.airtable.com/v0/oauth2/token",
-    {
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: process.env.AIRTABLE_CLIENT_ID,
-      client_secret: process.env.AIRTABLE_CLIENT_SECRET,
-    }
-  );
-  return {
-    accessToken: response.data.access_token,
-    refreshToken: response.data.refresh_token, // May or may not be returned/rotated by Airtable
-    // You should also calculate and return the new expiration time
-  };
+  try {
+    // 2. Send the POST request with the correct headers and data
+    const response = await axios.post(
+      "https://api.airtable.com/v0/oauth2/token",
+      data.toString(), // Convert URLSearchParams to the request body string
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded", // CRITICAL HEADER
+        },
+      }
+    ); // 3. Return the new tokens
 
-  console.error("❌ refreshAirtableToken function not fully implemented!");
-  throw new Error("Token refresh failed.");
+    return {
+      accessToken: response.data.access_token,
+      refreshToken: response.data.refresh_token, // NOTE: Airtable does not always return a new refresh_token. // Your logic in handleAirtableWebhook already handles this: // systemUser.refreshToken = newTokens.refreshToken || systemUser.refreshToken;
+    };
+  } catch (error) {
+    console.error(
+      "Airtable Token Refresh Failure:",
+      error.response?.data || error.message
+    ); // Re-throw a clear error to be caught by the main handler
+    throw new Error(
+      "Airtable Token Refresh failed: Check client_id/secret or refresh token validity."
+    );
+  }
 };
 
 /**
