@@ -36,7 +36,7 @@ export const registerWebhook = async (req, res) => {
       { headers }
     );
 
-    console.log("✅ New Webhook Registered:", response.data.id);
+    console.log("New Webhook Registered:", response.data.id);
     res.json(response.data);
   } catch (error) {
     console.error(
