@@ -50,19 +50,22 @@ export const registerWebhook = async (req, res) => {
 const refreshAirtableToken = async (refreshToken) => {
   // --- Implementation placeholder ---
   // In a real application, this would make a POST request to the Airtable token endpoint:
-  /*
-    const response = await axios.post('https://api.airtable.com/v0/oauth2/token', {
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: process.env.AIRTABLE_CLIENT_ID,
-        client_secret: process.env.AIRTABLE_CLIENT_SECRET,
-    });
-    return {
-        accessToken: response.data.access_token,
-        refreshToken: response.data.refresh_token, // May or may not be returned/rotated by Airtable
-        // You should also calculate and return the new expiration time
-    };
-    */
+
+  const response = await axios.post(
+    "https://api.airtable.com/v0/oauth2/token",
+    {
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: process.env.AIRTABLE_CLIENT_ID,
+      client_secret: process.env.AIRTABLE_CLIENT_SECRET,
+    }
+  );
+  return {
+    accessToken: response.data.access_token,
+    refreshToken: response.data.refresh_token, // May or may not be returned/rotated by Airtable
+    // You should also calculate and return the new expiration time
+  };
+
   console.error("❌ refreshAirtableToken function not fully implemented!");
   throw new Error("Token refresh failed.");
 };
