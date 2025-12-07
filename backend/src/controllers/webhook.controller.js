@@ -48,39 +48,58 @@ export const registerWebhook = async (req, res) => {
 };
 
 export const handleAirtableWebhook = async (req, res) => {
-  const { base: { id: baseId } = {}, webhook: { id: webhookId } = {} } =
-    req.body;
-
+  // ... (existing destructuring)
   if (!baseId || !webhookId) return res.sendStatus(200);
 
   try {
-    const systemUser = await User.findOne({ accessToken: { $exists: true } });
+    let systemUser = await User.findOne({ accessToken: { $exists: true } });
     if (!systemUser) return res.sendStatus(200);
 
-    const { data } = await axios.get(
-      `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`,
-      { headers: { Authorization: `Bearer ${systemUser.accessToken}` } }
-    );
-    console.dir(data, { depth: null });
-    for (const payload of data.payloads) {
-      if (!payload.changedTablesById) continue;
+    // --- API Call with Token Refresh Logic ---
+    const headers = { Authorization: `Bearer ${systemUser.accessToken}` };
+    const payloadUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`;
 
-      for (const tableId in payload.changedTablesById) {
-        const changes = payload.changeTablesById[tableId];
-        if (changes.destroyedRecordIds) {
-          await Response.updateMany(
-            { airtableRecordId: { $in: changes.destroyedRecordIds } },
-            { isDeletedInAirtable: true }
-          );
-          console.log(
-            `Synced: Marked ${changes.destroyedRecordIds.length} records as deleted.`
-          );
-        }
+    try {
+      // 1. Attempt the API call
+      const { data } = await axios.get(payloadUrl, { headers });
+
+      // ... (process payload data)
+      // ... (rest of the handleAirtableWebhook logic)
+
+      res.json({ success: true });
+    } catch (apiError) {
+      // 2. Check for 401 Unauthorized
+      if (apiError.response && apiError.response.status === 401) {
+        console.log("Token expired. Attempting refresh...");
+
+        // **3. Use Refresh Token to Get New Tokens**
+        // This function must implement the OAuth refresh flow.
+        const newTokens = await refreshAirtableToken(systemUser.refreshToken);
+
+        // **4. Update User in DB with New Tokens**
+        systemUser.accessToken = newTokens.accessToken;
+        systemUser.refreshToken = newTokens.refreshToken;
+        await systemUser.save();
+
+        // **5. Retry the Original Request**
+        const retryHeaders = {
+          Authorization: `Bearer ${newTokens.accessToken}`,
+        };
+        const { data } = await axios.get(payloadUrl, { headers: retryHeaders });
+
+        // ... (process payload data again)
+        // ... (rest of the handleAirtableWebhook logic)
+
+        res.json({ success: true });
+      } else {
+        // Handle other API errors (network, 404, 500, etc.)
+        throw apiError;
       }
     }
-    res.json({ success: true });
   } catch (error) {
-    console.error("Webhook Sync Error:", error.message);
+    console.error("Webhook Sync Error (Final):", error.message);
+    // Send 200 to Airtable to acknowledge the webhook, even if processing failed.
+    // This stops Airtable from retrying the hook incessantly.
     res.sendStatus(200);
   }
 };
