@@ -36,7 +36,7 @@ export const registerWebhook = async (req, res) => {
       { headers }
     );
 
-    console.log("New Webhook Registered:", response.data.id);
+    console.log("✅ New Webhook Registered:", response.data.id);
     res.json(response.data);
   } catch (error) {
     console.error(
@@ -61,13 +61,12 @@ export const handleAirtableWebhook = async (req, res) => {
       `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`,
       { headers: { Authorization: `Bearer ${systemUser.accessToken}` } }
     );
-
+    console.dir(data, { depth: null });
     for (const payload of data.payloads) {
       if (!payload.changedTablesById) continue;
 
-      Object.keys(payload.changedTablesById).forEach(async (tableId) => {
-        const changes = payload.changedTablesById[tableId];
-
+      for (const tableId in payload.changedTablesById) {
+        const changes = payload.changeTablesById[tableId];
         if (changes.destroyedRecordIds) {
           await Response.updateMany(
             { airtableRecordId: { $in: changes.destroyedRecordIds } },
@@ -77,9 +76,8 @@ export const handleAirtableWebhook = async (req, res) => {
             `Synced: Marked ${changes.destroyedRecordIds.length} records as deleted.`
           );
         }
-      });
+      }
     }
-
     res.json({ success: true });
   } catch (error) {
     console.error("Webhook Sync Error:", error.message);
