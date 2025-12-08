@@ -153,6 +153,13 @@ export const handleAirtableWebhook = async (req, res) => {
             console.log(`   🔎 Checking Record ID: ${recordId}`);
             const changeDetails = changes.changedRecordsById[recordId];
 
+            // --- DEBUG: PRINT THE FULL CHANGE OBJECT ---
+            console.log(
+              "   👀 FULL CHANGE DETAILS:",
+              JSON.stringify(changeDetails, null, 2)
+            );
+            // -------------------------------------------
+
             if (changeDetails.current && changeDetails.current.cellValues) {
               const newCellValues = changeDetails.current.cellValues;
               console.log(
@@ -167,23 +174,15 @@ export const handleAirtableWebhook = async (req, res) => {
 
               if (!localResponse) {
                 console.warn(
-                  `      ❌ SKIPPING: Record ${recordId} not found in MongoDB 'responses' collection.`
-                );
-                console.warn(
-                  `         (Ensure your DB has airtableRecordId: "${recordId}")`
+                  `      ❌ SKIPPING: Record ${recordId} not found in MongoDB.`
                 );
                 continue;
               }
-              console.log(
-                `      ✅ Found Local Response (Form ID: ${localResponse.formId})`
-              );
 
               // B. Find Form Schema
               const form = await Form.findById(localResponse.formId);
               if (!form) {
-                console.error(
-                  `      ❌ ERROR: Form ${localResponse.formId} not found!`
-                );
+                console.log("Form not found");
                 continue;
               }
 
@@ -191,8 +190,6 @@ export const handleAirtableWebhook = async (req, res) => {
 
               // C. Iterate Fields
               for (const [fieldId, newValue] of Object.entries(newCellValues)) {
-                console.log(`         👉 Field ID from Airtable: ${fieldId}`);
-
                 // Find matching question
                 const question = form.questions.find(
                   (q) => q.airtableFieldId === fieldId
@@ -200,34 +197,31 @@ export const handleAirtableWebhook = async (req, res) => {
 
                 if (question) {
                   console.log(
-                    `            ✅ Matched to Question Key: ${question.questionKey}`
+                    `            ✅ Matched ${fieldId} -> ${question.questionKey}`
                   );
-                  console.log(
-                    `            🔄 Updating value to: "${newValue}"`
-                  );
+                  console.log(`            🔄 Value: "${newValue}"`);
 
                   localResponse.answers.set(question.questionKey, newValue);
                   hasUpdates = true;
                 } else {
-                  console.warn(
-                    `            ⚠️  No matching question found in Form Schema for field ${fieldId}`
+                  // This is common if you deleted a column and made a new one
+                  console.log(
+                    `            ⚠️ Unmatched Field ID: ${fieldId} (Check your Form Schema)`
                   );
                 }
               }
 
-              // D. Save
               if (hasUpdates) {
                 localResponse.markModified("answers");
                 await localResponse.save();
-                console.log(
-                  `      💾 SUCCESS: MongoDB Document Saved for ${recordId}`
-                );
-              } else {
-                console.log(`      ℹ️  No relevant fields were updated.`);
+                console.log(`      💾 SAVED to Database.`);
               }
             } else {
               console.log(
-                `      ℹ️  Update event, but no cell values (might be a metadata change).`
+                `      ⚠️ Update received, but 'current.cellValues' is missing.`
+              );
+              console.log(
+                `      Check the 'FULL CHANGE DETAILS' log above to see why.`
               );
             }
           }
