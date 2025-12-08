@@ -1,264 +1,712 @@
 import axios from "axios";
+
 import { Response } from "../models/response.model.js";
+
 import { Form } from "../models/form.model.js";
+
 import { User } from "../models/user.model.js";
 
-// --- 1. Register Webhook ---
 export const registerWebhook = async (req, res) => {
-  console.log("--- Starting Webhook Registration ---");
   try {
     const { baseId } = req.params;
-    console.log(`Registering for Base ID: ${baseId}`);
 
     const user = await User.findById(req.user.userId);
-    if (!user) {
-      console.log("User not found for registration.");
-      return res.status(404).json({ error: "User not found" });
-    }
 
     const webhookUrl = `${process.env.AIRTABLE_WEBHOOK_URL}/api/webhooks/airtable`;
-    console.log(`Target Notification URL: ${webhookUrl}`);
 
     const headers = { Authorization: `Bearer ${user.accessToken}` };
+
     const listUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks`;
 
-    // 1. Cleanup old hooks
-    console.log("Fetching existing webhooks to clean up...");
     const listRes = await axios.get(listUrl, { headers });
 
-    for (const hook of listRes.data.webhooks) {
-      console.log(`Deleting old webhook: ${hook.id}`);
+    const existingHooks = listRes.data.webhooks;
+
+    console.log(
+      `Found ${existingHooks.length} existing webhooks. Cleaning up...`
+    );
+
+    for (const hook of existingHooks) {
       await axios.delete(`${listUrl}/${hook.id}`, { headers });
+
+      console.log(`Deleted old webhook: ${hook.id}`);
     }
 
-    // 2. Create new hook
-    // NOTE: We removed the 'filters' object to ensure we get ALL events (deletes, creates, updates)
-    const payloadSpec = {
-      notificationUrl: webhookUrl,
-      specification: {
-        options: {
-          // Empty options means "listen to everything"
-          filters: {
-            dataTypes: ["tableData"],
-            recordHistory: true, // Explicitly requesting history/changes
+    const response = await axios.post(
+      listUrl,
+
+      {
+        notificationUrl: webhookUrl,
+
+        specification: {
+          options: {
+            filters: { dataTypes: ["tableData"] },
           },
         },
       },
-    };
 
-    console.log(
-      "Sending registration payload:",
-      JSON.stringify(payloadSpec, null, 2)
+      { headers }
     );
 
-    const response = await axios.post(listUrl, payloadSpec, { headers });
+    console.log("✅ New Webhook Registered:", response.data.id);
 
-    console.log("SUCCESS: New Webhook Registered with ID:", response.data.id);
     res.json(response.data);
   } catch (error) {
     console.error(
       "Registration Failed:",
+
       error.response?.data || error.message
     );
+
     res.status(500).json({ error: "Failed to register webhook" });
   }
 };
 
-// --- 2. Token Refresh Utility ---
 const refreshAirtableToken = async (refreshToken) => {
-  console.log("--- Refreshing Airtable Token ---");
   const data = new URLSearchParams();
+
   data.append("grant_type", "refresh_token");
+
   data.append("refresh_token", refreshToken);
+
   data.append("client_id", process.env.AIRTABLE_CLIENT_ID);
+
   data.append("client_secret", process.env.AIRTABLE_CLIENT_SECRET);
 
-  const response = await axios.post(
-    "https://api.airtable.com/v0/oauth2/token",
-    data.toString(),
-    { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-  );
+  try {
+    const response = await axios.post(
+      "https://api.airtable.com/v0/oauth2/token",
 
-  console.log("Token refreshed successfully.");
-  return {
-    accessToken: response.data.access_token,
-    refreshToken: response.data.refresh_token,
-  };
+      data.toString(),
+
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
+
+    return {
+      accessToken: response.data.access_token,
+
+      refreshToken: response.data.refresh_token,
+    };
+  } catch (error) {
+    console.error(
+      "Airtable Token Refresh Failure:",
+
+      error.response?.data || error.message
+    );
+
+    throw new Error(
+      "Airtable Token Refresh failed: Check client_id/secret or refresh token validity."
+    );
+  }
 };
 
-// --- 3. Handle Webhook (Update & Delete) ---
 export const handleAirtableWebhook = async (req, res) => {
-  console.log("\n========================================");
-  console.log("INCOMING WEBHOOK HIT");
-  console.log("========================================");
+  const { base: { id: baseId } = {}, webhook: { id: webhookId } = {} } =
+    req.body;
 
-  const {
-    base: { id: baseId } = {},
-    webhook: { id: webhookId } = {},
-    cursor,
-  } = req.body;
+  if (!baseId || !webhookId) {
+    console.log(
+      "Airtable Webhook: Received ping or incomplete body. Acknowledging."
+    );
 
-  console.log("Webhook Params:", { baseId, webhookId, cursor });
-
-  // If no cursor, it is a ping. Acknowledge and exit.
-  if (!baseId || !webhookId || !cursor) {
-    console.log("Ping received (no cursor). Sending 200 OK.");
     return res.sendStatus(200);
   }
 
   const fetchAndProcessPayload = async (user, isRetry = false) => {
-    console.log(`Processing payload (Retry: ${isRetry})...`);
-
     const headers = { Authorization: `Bearer ${user.accessToken}` };
-    const payloadUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads?cursor=${cursor}`;
 
-    console.log(`Fetching payloads from: ${payloadUrl}`);
+    const payloadUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`;
+
+    console.log(
+      `Fetching webhook payload for base ${baseId}... (Retry: ${isRetry})`
+    );
+
     const { data } = await axios.get(payloadUrl, { headers });
 
-    // LOG THE RAW PAYLOAD FROM AIRTABLE
-    console.log("--- RAW AIRTABLE PAYLOAD ---");
-    console.log(JSON.stringify(data, null, 2));
-    console.log("----------------------------");
-
-    if (!data.payloads || data.payloads.length === 0) {
-      console.log("No payloads found in response.");
-      return;
-    }
+    console.dir(data, { depth: null });
 
     for (const payload of data.payloads) {
-      if (!payload.changedTablesById) {
-        console.log("Skipping payload: No 'changedTablesById' found.");
-        continue;
-      }
+      if (!payload.changedTablesById) continue;
 
       for (const tableId in payload.changedTablesById) {
         const changes = payload.changedTablesById[tableId];
-        console.log(`Processing changes for Table ID: ${tableId}`);
 
-        // --- A. Handle Deletions ---
-        if (
-          changes.destroyedRecordIds &&
-          changes.destroyedRecordIds.length > 0
-        ) {
-          console.log("!!! DELETION DETECTED !!!");
-          console.log("IDs to delete:", changes.destroyedRecordIds);
-
-          // FIX: Added $set operator here
-          const result = await Response.updateMany(
+        if (changes.destroyedRecordIds) {
+          await Response.updateMany(
             { airtableRecordId: { $in: changes.destroyedRecordIds } },
-            { $set: { isDeletedInAirtable: true } }
+
+            { isDeletedInAirtable: true }
           );
 
           console.log(
-            `Synced: Marked ${result.modifiedCount} mongo records as deleted.`
+            `Synced: Marked ${changes.destroyedRecordIds.length} records in table ${tableId} as deleted.`
           );
-        } else {
-          console.log("No deletions in this table batch.");
-        }
-
-        // --- B. Handle Updates ---
-        if (changes.changedRecordsById) {
-          console.log(
-            `Updates detected for ${
-              Object.keys(changes.changedRecordsById).length
-            } records.`
-          );
-
-          for (const recordId in changes.changedRecordsById) {
-            const changeDetails = changes.changedRecordsById[recordId];
-
-            // Check for both data formats
-            const currentData = changeDetails.current;
-            const newCellValues =
-              currentData?.cellValuesByFieldId || currentData?.cellValues;
-
-            if (newCellValues) {
-              console.log(`Processing update for Record: ${recordId}`);
-
-              const localResponse = await Response.findOne({
-                airtableRecordId: recordId,
-              });
-
-              if (!localResponse) {
-                console.log(
-                  `Record ${recordId} not found in MongoDB. Skipping.`
-                );
-                continue;
-              }
-
-              const form = await Form.findById(localResponse.formId);
-              if (!form) {
-                console.log(`Form not found for response. Skipping.`);
-                continue;
-              }
-
-              let hasUpdates = false;
-
-              for (const [fieldId, newValue] of Object.entries(newCellValues)) {
-                const question = form.questions.find(
-                  (q) => q.airtableFieldId === fieldId
-                );
-
-                if (question) {
-                  console.log(
-                    `Updating field: ${question.questionKey} -> ${newValue}`
-                  );
-                  localResponse.answers.set(question.questionKey, newValue);
-                  hasUpdates = true;
-                }
-              }
-
-              if (hasUpdates) {
-                localResponse.markModified("answers");
-                await localResponse.save();
-                console.log(
-                  `Synced: Successfully saved update for ${recordId}`
-                );
-              } else {
-                console.log(`No mapped fields changed for ${recordId}`);
-              }
-            }
-          }
         }
       }
     }
   };
 
   try {
-    // Note: This grabs the first user with a token. Ensure this matches your actual logic.
     let systemUser = await User.findOne({ accessToken: { $exists: true } });
+
     if (!systemUser) {
-      console.log("No system user found to process webhook.");
+      console.warn(
+        "Webhook Sync: No system user found for Airtable API access."
+      );
+
       return res.sendStatus(200);
     }
 
     try {
       await fetchAndProcessPayload(systemUser, false);
-      res.json({ success: true });
-    } catch (apiError) {
-      // Handle Token Expiry
-      if (apiError.response && apiError.response.status === 401) {
-        console.log("401 Unauthorized received. Attempting Token Refresh...");
 
-        if (!systemUser.refreshToken) throw new Error("Missing Refresh Token");
+      return res.json({ success: true });
+    } catch (apiError) {
+      if (apiError.response && apiError.response.status === 401) {
+        console.warn("Access Token expired (401). Attempting to refresh...");
+
+        if (!systemUser.refreshToken) {
+          console.error(
+            "Token refresh failed: No refresh token available on user object."
+          );
+
+          throw new Error("Missing Refresh Token");
+        }
 
         const newTokens = await refreshAirtableToken(systemUser.refreshToken);
+
         systemUser.accessToken = newTokens.accessToken;
+
         systemUser.refreshToken =
           newTokens.refreshToken || systemUser.refreshToken;
+
         await systemUser.save();
 
-        console.log("Retrying payload processing with new token...");
+        console.log(" Token successfully refreshed and saved to DB.");
+
         await fetchAndProcessPayload(systemUser, true);
-        res.json({ success: true });
+
+        return res.json({ success: true });
       } else {
         throw apiError;
       }
     }
   } catch (error) {
-    console.error("Webhook Error:", error.message);
-    if (error.response) console.error("API Error Data:", error.response.data);
+    console.error(
+      "Webhook Sync Error (Final):",
 
-    res.sendStatus(200); // Always return 200 to Airtable to prevent retries on logic errors
+      error.response?.data || error.message
+    );
+
+    res.sendStatus(200);
   }
 };
+
+import axios from "axios";
+
+import { User } from "../models/user.model.js";
+
+import { Form } from "../models/form.model.js";
+
+import { Response } from "../models/response.model.js";
+
+export const getBases = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId);
+
+    const response = await axios.get("https://api.airtable.com/v0/meta/bases", {
+      headers: { Authorization: `Bearer ${user.accessToken}` },
+    });
+
+    res.json(response.data.bases);
+  } catch (error) {
+    console.error("Error fetching bases:", error.message);
+
+    res.status(500).json({ error: "Failed to fetch bases" });
+  }
+};
+
+export const getTables = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId);
+
+    const { baseId } = req.params;
+
+    const response = await axios.get(
+      `https://api.airtable.com/v0/meta/bases/${baseId}/tables`,
+
+      {
+        headers: { Authorization: `Bearer ${user.accessToken}` },
+      }
+    );
+
+    res.json(response.data.tables);
+  } catch (error) {
+    console.error("Error fetching tables:", error.message);
+
+    res.status(500).json({ error: "Failed to fetch tables" });
+  }
+};
+
+export const createForm = async (req, res) => {
+  try {
+    const { title, baseId, tableId, questions } = req.body;
+
+    console.log("Receiving Form Data:", {
+      title,
+
+      baseId,
+
+      tableId,
+
+      questionCount: questions?.length,
+    });
+
+    if (!req.user || !req.user.userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    if (!title || !baseId || !tableId || !questions || questions.length === 0) {
+      return res.status(400).json({
+        error: "Missing required fields (title, baseId, tableId, or questions)",
+      });
+    }
+
+    const newForm = await Form.create({
+      userId: req.user.userId,
+
+      title: title,
+
+      airtableBaseId: baseId,
+
+      airtableTableId: tableId,
+
+      questions: questions,
+    });
+
+    console.log("Form Saved Successfully:", newForm._id);
+
+    res.status(201).json(newForm);
+  } catch (error) {
+    console.error("Save Error:", error);
+
+    res.status(500).json({ error: error.message || "Failed to save form" });
+  }
+};
+
+export const getFormById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const form = await Form.findById(id);
+
+    if (!form) {
+      return res.status(404).json({ error: "Form not found" });
+    }
+
+    res.json(form);
+  } catch (error) {
+    console.error("Error fetching form:", error);
+
+    res.status(500).json({ error: "Server Error" });
+  }
+};
+
+export const getUserForms = async (req, res) => {
+  try {
+    const forms = await Form.find({ userId: req.user.userId }).sort({
+      createdAt: -1,
+    });
+
+    res.json(forms);
+  } catch (error) {
+    console.error("Error fetching user forms:", error);
+
+    res.status(500).json({ error: "Server Error" });
+  }
+};
+
+export const submitResponse = async (req, res) => {
+  try {
+    const { formId } = req.params;
+
+    const { answers } = req.body;
+
+    console.log(`Submitting to Form ${formId}`, answers);
+
+    const form = await Form.findById(formId);
+
+    if (!form) return res.status(404).json({ error: "Form not found" });
+
+    const owner = await User.findById(form.userId);
+
+    if (!owner) return res.status(404).json({ error: "Form owner not found" });
+
+    const data = {};
+
+    form.questions.forEach((q) => {
+      const answer = answers[q.questionKey];
+
+      if (answer !== undefined && answer !== "") {
+        data[q.airtableFieldId] = answer;
+      }
+    });
+
+    const airtableUrl = `https://api.airtable.com/v0/${form.airtableBaseId}/${form.airtableTableId}`;
+
+    const airtableRes = await axios.post(
+      airtableUrl,
+
+      { fields: data },
+
+      { headers: { Authorization: `Bearer ${owner.accessToken}` } }
+    );
+
+    const newRecordId = airtableRes.data.id;
+
+    console.log("Saved to Airtable with ID:", newRecordId);
+
+    const response = await Response.create({
+      formId: form._id,
+
+      airtableRecordId: newRecordId,
+
+      answers: answers,
+    });
+
+    res.status(201).json({ message: "Success", id: response._id });
+  } catch (error) {
+    console.error("Submission Error:", error.response?.data || error.message);
+
+    res.status(500).json({ error: "Failed to submit form" });
+  }
+};
+
+export const getFormResponses = async (req, res) => {
+  try {
+    const { formId } = req.params;
+
+    const form = await Form.findById(formId);
+
+    if (!form) return res.status(404).json({ error: "Form not found" });
+
+    if (form.userId.toString() !== req.user.userId) {
+      return res
+
+        .status(403)
+
+        .json({ error: "Unauthorized access to these responses" });
+    }
+
+    const responses = await Response.find({
+      formId,
+
+      isDeletedInAirtable: { $ne: true },
+    }).sort({ submittedAt: -1 });
+
+    res.json(responses);
+  } catch (error) {
+    console.error("Error fetching responses:", error);
+
+    res.status(500).json({ error: "Server Error" });
+  }
+};
+
+import crypto from "crypto";
+
+import axios from "axios";
+
+import jwt from "jsonwebtoken";
+
+import { User } from "../models/user.model.js";
+
+export const login = (req, res) => {
+  const state = crypto.randomBytes(16).toString("hex");
+
+  const codeVerifier = crypto.randomBytes(32).toString("base64url");
+
+  const codeChallenge = crypto
+
+    .createHash("sha256")
+
+    .update(codeVerifier)
+
+    .digest("base64url");
+
+  const isProduction = process.env.NODE_ENV === "production";
+
+  const cookieOptions = {
+    httpOnly: true,
+
+    secure: isProduction,
+
+    sameSite: isProduction ? "none" : "lax",
+
+    maxAge: 10 * 60 * 1000,
+  };
+
+  res.cookie("oauth_state", state, cookieOptions);
+
+  res.cookie("oauth_verifier", codeVerifier, cookieOptions);
+
+  const authUrl =
+    `https://airtable.com/oauth2/v1/authorize?` +
+    `client_id=${process.env.AIRTABLE_CLIENT_ID}&` +
+    `redirect_uri=${encodeURIComponent(
+      process.env.AIRTABLE_OAUTH_REDIRECT_URL
+    )}&` +
+    `response_type=code&` +
+    `scope=data.records:read data.records:write schema.bases:read webhook:manage user.email:read&` +
+    `state=${state}&` +
+    `code_challenge=${codeChallenge}&` +
+    `code_challenge_method=S256`;
+
+  res.redirect(authUrl);
+};
+
+export const callback = async (req, res) => {
+  const { code, state } = req.query;
+
+  const storedState = req.cookies.oauth_state;
+
+  const codeVerifier = req.cookies.oauth_verifier;
+
+  if (!storedState || !codeVerifier || state !== storedState) {
+    return res
+
+      .status(400)
+
+      .send("Security Error: Invalid state or Session expired");
+  }
+
+  try {
+    const credentials = Buffer.from(
+      `${process.env.AIRTABLE_CLIENT_ID}:${process.env.AIRTABLE_CLIENT_SECRET}`
+    ).toString("base64");
+
+    const response = await axios.post(
+      "https://airtable.com/oauth2/v1/token",
+
+      new URLSearchParams({
+        grant_type: "authorization_code",
+
+        code: code,
+
+        redirect_uri: process.env.AIRTABLE_OAUTH_REDIRECT_URL,
+
+        client_id: process.env.AIRTABLE_CLIENT_ID,
+
+        code_verifier: codeVerifier,
+      }),
+
+      {
+        headers: {
+          Authorization: `Basic ${credentials}`,
+
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
+
+    res.clearCookie("oauth_state");
+
+    res.clearCookie("oauth_verifier");
+
+    const { access_token, refresh_token, expires_in } = response.data;
+
+    const userMe = await axios.get("https://api.airtable.com/v0/meta/whoami", {
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+
+    const user = await User.findOneAndUpdate(
+      { airtableUserId: userMe.data.id },
+
+      {
+        email: userMe.data.email,
+
+        accessToken: access_token,
+
+        refreshToken: refresh_token,
+
+        tokenExpiresAt: new Date(Date.now() + expires_in * 1000),
+      },
+
+      { new: true, upsert: true }
+    );
+
+    const token = jwt.sign(
+      { userId: user._id, email: user.email },
+
+      process.env.JWT_SECRET,
+
+      { expiresIn: "7d" }
+    );
+
+    const isProduction = process.env.NODE_ENV === "production";
+
+    res.cookie("token", token, {
+      httpOnly: true,
+
+      secure: isProduction,
+
+      sameSite: isProduction ? "none" : "lax",
+
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.redirect(`${process.env.CLIENT_URL}/dashboard`);
+  } catch (error) {
+    console.error("Auth Error:", error.response?.data || error.message);
+
+    res.redirect(`${process.env.CLIENT_URL}/login?error=true`);
+  }
+};
+
+export const logout = (req, res) => {
+  res.clearCookie("token");
+
+  res.status(200).json({ message: "Logged out successfully" });
+};
+
+export const checkAuth = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId).select(
+      "-accessToken -refreshToken"
+    );
+
+    res.status(200).json(user);
+  } catch (error) {
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+import { Router } from "express";
+
+import {
+  handleAirtableWebhook,
+  registerWebhook,
+} from "../controllers/webhook.controller.js";
+
+import { protectRoute } from "../middleware/protect.route.js";
+
+const router = Router();
+
+router.post("/register/:baseId", protectRoute, registerWebhook);
+
+router.post("/airtable", handleAirtableWebhook);
+
+export default router;
+
+import mongoose from "mongoose";
+
+const userSchema = new mongoose.Schema(
+  {
+    airtableUserId: { type: String, required: true, unique: true },
+
+    email: String,
+
+    accessToken: { type: String, required: true },
+
+    refreshToken: { type: String, required: true },
+
+    tokenExpiresAt: { type: Date, required: true },
+  },
+
+  { timestamps: true }
+);
+
+export const User = mongoose.model("User", userSchema);
+
+import mongoose from "mongoose";
+
+const responseSchema = new mongoose.Schema({
+  formId: { type: mongoose.Schema.Types.ObjectId, ref: "Form", required: true },
+
+  airtableRecordId: { type: String, required: true },
+
+  answers: { type: Map, of: mongoose.Schema.Types.Mixed },
+
+  isDeletedInAirtable: { type: Boolean, default: false },
+
+  submittedAt: { type: Date, default: Date.now },
+});
+
+export const Response = mongoose.model("Response", responseSchema);
+
+import mongoose from "mongoose";
+
+const QuestionSchema = new mongoose.Schema({
+  questionKey: { type: String, required: true },
+
+  airtableFieldId: { type: String, required: true },
+
+  label: { type: String, required: true },
+
+  type: {
+    type: String,
+
+    enum: [
+      "singleLineText",
+
+      "multilineText",
+
+      "singleSelect",
+
+      "multipleSelects",
+
+      "multipleAttachments",
+    ],
+
+    required: true,
+  },
+
+  options: [String],
+
+  required: { type: Boolean, default: false },
+
+  conditionalRules: {
+    type: {
+      logic: { type: String, enum: ["AND", "OR"] },
+
+      conditions: [
+        {
+          questionKey: String,
+
+          operator: String,
+
+          value: mongoose.Schema.Types.Mixed,
+        },
+      ],
+    },
+
+    default: null,
+  },
+});
+
+const formSchema = new mongoose.Schema(
+  {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+
+      ref: "User",
+
+      required: true,
+    },
+
+    title: String,
+
+    airtableBaseId: String,
+
+    airtableTableId: String,
+
+    questions: [QuestionSchema],
+  },
+
+  { timestamps: true }
+);
+
+export const Form = mongoose.model("Form", formSchema);
