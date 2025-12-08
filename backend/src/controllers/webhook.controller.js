@@ -100,13 +100,12 @@ export const handleAirtableWebhook = async (req, res) => {
     );
 
     const { data } = await axios.get(payloadUrl, { headers });
-    console.dir(data, { depth: null });
-
     for (const payload of data.payloads) {
       if (!payload.changedTablesById) continue;
 
       for (const tableId in payload.changedTablesById) {
         const changes = payload.changedTablesById[tableId];
+
         if (changes.destroyedRecordIds) {
           await Response.updateMany(
             { airtableRecordId: { $in: changes.destroyedRecordIds } },
@@ -116,10 +115,46 @@ export const handleAirtableWebhook = async (req, res) => {
             `Synced: Marked ${changes.destroyedRecordIds.length} records in table ${tableId} as deleted.`
           );
         }
+        if (changes.changedRecordsById) {
+          for (const recordId in changes.changedRecordsById) {
+            const changeDetails = changes.changedRecordsById[recordId];
+            if (changeDetails.current && changeDetails.current.cellValues) {
+              const newCellValues = changeDetails.current.cellValues;
+              const localResponse = await Response.findOne({
+                airtableRecordId: recordId,
+              });
+
+              if (!localResponse) {
+                console.log(
+                  `Skipping update for ${recordId}: Record not found in local DB.`
+                );
+                continue;
+              }
+              const form = await Form.findById(localResponse.formId);
+              if (!form) continue;
+
+              let hasUpdates = false;
+              for (const [fieldId, newValue] of Object.entries(newCellValues)) {
+                const question = form.questions.find(
+                  (q) => q.airtableFieldId === fieldId
+                );
+
+                if (question) {
+                  localResponse.answers.set(question.questionKey, newValue);
+                  hasUpdates = true;
+                }
+              }
+              if (hasUpdates) {
+                localResponse.markModified("answers");
+                await localResponse.save();
+                console.log(`Synced: Updated fields for record ${recordId}`);
+              }
+            }
+          }
+        }
       }
     }
   };
-
   try {
     let systemUser = await User.findOne({ accessToken: { $exists: true } });
     if (!systemUser) {
