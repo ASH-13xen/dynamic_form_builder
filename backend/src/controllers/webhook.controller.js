@@ -81,122 +81,189 @@ const refreshAirtableToken = async (refreshToken) => {
 };
 
 export const handleAirtableWebhook = async (req, res) => {
+  console.log("---------------------------------------------------");
+  console.log("📡 WEBHOOK HIT: Received request from Airtable");
+
   const { base: { id: baseId } = {}, webhook: { id: webhookId } = {} } =
     req.body;
 
   if (!baseId || !webhookId) {
-    console.log(
-      "Airtable Webhook: Received ping or incomplete body. Acknowledging."
-    );
+    console.log("⚠️  Missing baseId or webhookId. Likely a ping request.");
     return res.sendStatus(200);
   }
 
+  console.log(`🆔 Base ID: ${baseId}`);
+  console.log(`🆔 Webhook ID: ${webhookId}`);
+
+  // Internal function to process the data
   const fetchAndProcessPayload = async (user, isRetry = false) => {
     const headers = { Authorization: `Bearer ${user.accessToken}` };
     const payloadUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`;
 
     console.log(
-      `Fetching webhook payload for base ${baseId}... (Retry: ${isRetry})`
+      `⬇️  Fetching payloads from: ${payloadUrl} (Retry: ${isRetry})`
     );
 
     const { data } = await axios.get(payloadUrl, { headers });
+
+    // CRITICAL DEBUG: Log the raw data from Airtable
+    console.log("📦 RAW PAYLOAD RECEIVED:", JSON.stringify(data, null, 2));
+
+    if (!data.payloads || data.payloads.length === 0) {
+      console.log("⚠️  No payloads found in response.");
+      return;
+    }
+
     for (const payload of data.payloads) {
-      if (!payload.changedTablesById) continue;
+      console.log(
+        `🔄 Processing Payload Sequence: ${payload.baseTransactionNumber}`
+      );
+
+      if (!payload.changedTablesById) {
+        console.log("ℹ️  No table changes in this payload. Skipping.");
+        continue;
+      }
 
       for (const tableId in payload.changedTablesById) {
+        console.log(`📂 Processing Table ID: ${tableId}`);
         const changes = payload.changedTablesById[tableId];
 
+        // 1. Handle Deletions
         if (changes.destroyedRecordIds) {
-          await Response.updateMany(
+          console.log(
+            `🗑️  Found ${changes.destroyedRecordIds.length} deletions.`
+          );
+          const deleteResult = await Response.updateMany(
             { airtableRecordId: { $in: changes.destroyedRecordIds } },
             { isDeletedInAirtable: true }
           );
           console.log(
-            `Synced: Marked ${changes.destroyedRecordIds.length} records in table ${tableId} as deleted.`
+            `✅ Database Updated: ${deleteResult.modifiedCount} records marked deleted.`
           );
         }
+
+        // 2. Handle Updates
         if (changes.changedRecordsById) {
+          console.log(
+            `✏️  Found updates for records:`,
+            Object.keys(changes.changedRecordsById)
+          );
+
           for (const recordId in changes.changedRecordsById) {
+            console.log(`   🔎 Checking Record ID: ${recordId}`);
             const changeDetails = changes.changedRecordsById[recordId];
+
             if (changeDetails.current && changeDetails.current.cellValues) {
               const newCellValues = changeDetails.current.cellValues;
+              console.log(
+                `      📝 Cell Values Changed:`,
+                JSON.stringify(newCellValues)
+              );
+
+              // A. Find Local Response
               const localResponse = await Response.findOne({
                 airtableRecordId: recordId,
               });
 
               if (!localResponse) {
-                console.log(
-                  `Skipping update for ${recordId}: Record not found in local DB.`
+                console.warn(
+                  `      ❌ SKIPPING: Record ${recordId} not found in MongoDB 'responses' collection.`
+                );
+                console.warn(
+                  `         (Ensure your DB has airtableRecordId: "${recordId}")`
                 );
                 continue;
               }
+              console.log(
+                `      ✅ Found Local Response (Form ID: ${localResponse.formId})`
+              );
+
+              // B. Find Form Schema
               const form = await Form.findById(localResponse.formId);
-              if (!form) continue;
+              if (!form) {
+                console.error(
+                  `      ❌ ERROR: Form ${localResponse.formId} not found!`
+                );
+                continue;
+              }
 
               let hasUpdates = false;
+
+              // C. Iterate Fields
               for (const [fieldId, newValue] of Object.entries(newCellValues)) {
+                console.log(`         👉 Field ID from Airtable: ${fieldId}`);
+
+                // Find matching question
                 const question = form.questions.find(
                   (q) => q.airtableFieldId === fieldId
                 );
 
                 if (question) {
+                  console.log(
+                    `            ✅ Matched to Question Key: ${question.questionKey}`
+                  );
+                  console.log(
+                    `            🔄 Updating value to: "${newValue}"`
+                  );
+
                   localResponse.answers.set(question.questionKey, newValue);
                   hasUpdates = true;
+                } else {
+                  console.warn(
+                    `            ⚠️  No matching question found in Form Schema for field ${fieldId}`
+                  );
                 }
               }
+
+              // D. Save
               if (hasUpdates) {
                 localResponse.markModified("answers");
                 await localResponse.save();
-                console.log(`Synced: Updated fields for record ${recordId}`);
+                console.log(
+                  `      💾 SUCCESS: MongoDB Document Saved for ${recordId}`
+                );
+              } else {
+                console.log(`      ℹ️  No relevant fields were updated.`);
               }
+            } else {
+              console.log(
+                `      ℹ️  Update event, but no cell values (might be a metadata change).`
+              );
             }
           }
         }
       }
     }
   };
+
+  // Execution Block
   try {
     let systemUser = await User.findOne({ accessToken: { $exists: true } });
     if (!systemUser) {
-      console.warn(
-        "Webhook Sync: No system user found for Airtable API access."
-      );
+      console.warn("❌ Webhook Sync: No system user found in DB.");
       return res.sendStatus(200);
     }
 
     try {
       await fetchAndProcessPayload(systemUser, false);
-      return res.json({ success: true });
+      res.json({ success: true });
     } catch (apiError) {
       if (apiError.response && apiError.response.status === 401) {
-        console.warn("Access Token expired (401). Attempting to refresh...");
-
-        if (!systemUser.refreshToken) {
-          console.error(
-            "Token refresh failed: No refresh token available on user object."
-          );
-          throw new Error("Missing Refresh Token");
-        }
-
+        console.warn("🔐 Access Token expired (401). Refreshing...");
         const newTokens = await refreshAirtableToken(systemUser.refreshToken);
-
         systemUser.accessToken = newTokens.accessToken;
-        systemUser.refreshToken =
-          newTokens.refreshToken || systemUser.refreshToken;
+        if (newTokens.refreshToken)
+          systemUser.refreshToken = newTokens.refreshToken;
         await systemUser.save();
-        console.log(" Token successfully refreshed and saved to DB.");
 
         await fetchAndProcessPayload(systemUser, true);
-        return res.json({ success: true });
+        res.json({ success: true });
       } else {
         throw apiError;
       }
     }
   } catch (error) {
-    console.error(
-      "Webhook Sync Error (Final):",
-      error.response?.data || error.message
-    );
+    console.error("FINAL ERROR:", error.response?.data || error.message);
     res.sendStatus(200);
   }
 };
