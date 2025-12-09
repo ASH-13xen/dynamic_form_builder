@@ -135,57 +135,80 @@ export const handleAirtableWebhook = async (req, res) => {
   console.log(`[2] Processing Event -> Base: ${baseId}, Webhook: ${webhookId}`);
 
   const fetchAndProcessPayload = async (user, isRetry = false) => {
-    console.log(`\n   --- Fetching Payloads (Retry: ${isRetry}) ---`);
     const headers = { Authorization: `Bearer ${user.accessToken}` };
     const payloadUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`;
 
     console.log(`   [3a] GET Request to: ${payloadUrl}`);
-
     const { data } = await axios.get(payloadUrl, { headers });
 
-    console.log("   [3b] Payload Data Received from Airtable:");
-    // Using console.dir specifically for deep nesting
-    console.dir(data, { depth: null, colors: true });
+    // 1. FILTER: Only look at payloads that actually have a table change
+    const validPayloads = data.payloads.filter((p) => p.changedTablesById);
 
-    if (!data.payloads || data.payloads.length === 0) {
-      console.log("   [3c] No payloads found in response array.");
-    }
+    console.log(
+      `   [3b] Found ${data.payloads.length} total payloads. (${validPayloads.length} have table changes)`
+    );
 
-    for (const payload of data.payloads) {
+    for (const payload of validPayloads) {
       console.log(
-        `   [4] Processing Payload Sequence #${payload.baseTransactionNumber}`
+        `   [4] Processing Sequence #${payload.baseTransactionNumber}`
       );
 
-      if (!payload.changedTablesById) {
-        console.log("       - No 'changedTablesById' found. Skipping.");
-        continue;
-      }
-
       for (const tableId in payload.changedTablesById) {
-        console.log(`       [5] Checking Table ID: ${tableId}`);
         const changes = payload.changedTablesById[tableId];
 
-        console.log(
-          "       - Changes Object:",
-          JSON.stringify(changes, null, 2)
-        );
-
-        if (changes.destroyedRecordIds) {
+        // --- DELETION LOGIC START ---
+        if (
+          changes.destroyedRecordIds &&
+          changes.destroyedRecordIds.length > 0
+        ) {
           console.log(
             `       🚨 [6] DELETE DETECTED. IDs:`,
             changes.destroyedRecordIds
           );
 
+          // DEBUG STEP: Check if these IDs actually exist in your DB before trying to update
+          const count = await Response.countDocuments({
+            airtableRecordId: { $in: changes.destroyedRecordIds },
+          });
+
+          if (count === 0) {
+            console.error(
+              `       ❌ [CRITICAL WARNING] MongoDB contains 0 records with these airtableRecordIds!`
+            );
+            console.error(
+              `          - Are you saving 'airtableRecordId' when you create the Response?`
+            );
+            console.error(
+              `          - Expected ID format: ${changes.destroyedRecordIds[0]}`
+            );
+          } else {
+            console.log(
+              `       ✅ [DEBUG] Found ${count} matching records in DB. Proceeding to update.`
+            );
+          }
+
           const updateResult = await Response.updateMany(
             { airtableRecordId: { $in: changes.destroyedRecordIds } },
-            { isDeletedInAirtable: true }
+            { $set: { isDeletedInAirtable: true } } // Explicit $set is safer
           );
 
           console.log(
             `       ✅ [7] DB Update Result: Matched ${updateResult.matchedCount}, Modified ${updateResult.modifiedCount}`
           );
-        } else {
-          console.log("       - No 'destroyedRecordIds' in this table change.");
+        }
+        // --- DELETION LOGIC END ---
+        else if (changes.createdRecordsById) {
+          console.log(
+            `       ✨ [Info] Records Created (Count: ${
+              Object.keys(changes.createdRecordsById).length
+            }) - No action taken.`
+          );
+        } else if (changes.changedRecordsById) {
+          console.log(
+            `       Kg [Info] Records Updated (Count: ${
+              Object.keys(changes.changedRecordsById).length
+            }) - No action taken.`
+          );
         }
       }
     }
