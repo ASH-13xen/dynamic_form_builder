@@ -42,7 +42,7 @@ const CreateForm = () => {
   const handleBaseChange = async (baseId: string) => {
     setSelection({ baseId, tableId: "" });
     if (!baseId) return;
-    const res2 = await axios.post(`/api/webhooks/register/${baseId}`);
+    await axios.post(`/api/webhooks/register/${baseId}`);
     const res = await axios.get(`/api/forms/tables/${baseId}`);
     setData((prev) => ({ ...prev, tables: res.data }));
   };
