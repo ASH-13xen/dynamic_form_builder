@@ -2,7 +2,7 @@ import axios from "axios";
 import { Response } from "../models/response.model.js";
 import { User } from "../models/user.model.js";
 
-// --- REFRESH TOKEN HELPER FUNCTION ---
+// --- HELPER: REFRESH TOKEN ---
 const refreshAirtableToken = async (refreshToken) => {
   const data = new URLSearchParams();
   data.append("grant_type", "refresh_token");
@@ -16,7 +16,6 @@ const refreshAirtableToken = async (refreshToken) => {
       data.toString(),
       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
-
     return {
       accessToken: response.data.access_token,
       refreshToken: response.data.refresh_token,
@@ -26,12 +25,11 @@ const refreshAirtableToken = async (refreshToken) => {
       "Airtable Token Refresh Failure:",
       error.response?.data || error.message
     );
-    // Throw an error to trigger the main webhook handler's catch block
     throw new Error("Airtable Token Refresh failed.");
   }
 };
 
-// --- WEBHOOK REGISTRATION (CLEANUP) ---
+// --- REGISTER WEBHOOK ---
 export const registerWebhook = async (req, res) => {
   try {
     const { baseId } = req.params;
@@ -43,12 +41,12 @@ export const registerWebhook = async (req, res) => {
     const listRes = await axios.get(listUrl, { headers });
     const existingHooks = listRes.data.webhooks;
     console.log(
-      `🔔 Webhook Registration: Found ${existingHooks.length} existing webhooks. Cleaning up...`
+      `🔔 REGISTRATION: Starting cleanup of ${existingHooks.length} old webhooks...`
     );
 
     for (const hook of existingHooks) {
       await axios.delete(`${listUrl}/${hook.id}`, { headers });
-      console.log(`✅ Deleted old webhook: ${hook.id}`);
+      console.log(`✅ REGISTRATION: Deleted old hook: ${hook.id}`);
     }
 
     const response = await axios.post(
@@ -64,24 +62,26 @@ export const registerWebhook = async (req, res) => {
       { headers }
     );
 
-    console.log("✅ New Webhook Registered:", response.data.id);
+    console.log("✅ REGISTRATION: New Webhook Registered:", response.data.id);
     res.json(response.data);
   } catch (error) {
     console.error(
-      "❌ Webhook Registration Failed:",
+      "❌ REGISTRATION Failed:",
       error.response?.data || error.message
     );
     res.status(500).json({ error: "Failed to register webhook" });
   }
 };
 
-// --- WEBHOOK HANDLER (FIXED FOR DELETIONS AND REFRESH) ---
+// --- HANDLE WEBHOOK ---
 export const handleAirtableWebhook = async (req, res) => {
   const { base: { id: baseId } = {}, webhook: { id: webhookId } = {} } =
     req.body;
 
   if (!baseId || !webhookId) {
-    console.log("🔔 Webhook Ping Acknowledged.");
+    console.log(
+      "🔔 WEBHOOK START: Received ping/incomplete body. Sending 200."
+    );
     return res.sendStatus(200);
   }
 
@@ -89,43 +89,77 @@ export const handleAirtableWebhook = async (req, res) => {
     const headers = { Authorization: `Bearer ${user.accessToken}` };
     const payloadUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`;
 
-    console.log("🔎 Fetching webhook payload...");
+    console.log(`🔎 WEBHOOK SYNC: Starting fetch for base ${baseId}...`);
     const { data } = await axios.get(payloadUrl, { headers });
 
-    // The cursor value is required by Airtable but we don't need to manually process it here.
-    console.log(`Payloads Received: ${data.payloads.length} transactions.`);
+    console.log(
+      `PAYLOAD: Received ${data.payloads.length} total transactions since last sync.`
+    );
 
     let deletedCount = 0;
+    let transactionIndex = 0;
 
     for (const payload of data.payloads) {
-      if (!payload.changedTablesById) continue;
+      transactionIndex++;
+
+      console.log(
+        `--- TRANSACTION #${transactionIndex} (Total Transactions: ${data.payloads.length}) ---`
+      );
+
+      if (!payload.changedTablesById) {
+        console.log("  -> No table changes found in this transaction.");
+        continue;
+      }
 
       for (const tableId in payload.changedTablesById) {
         const changes = payload.changedTablesById[tableId];
 
-        // CRITICAL FIX: Only look for destroyedRecordIds to handle deletions.
         if (
           changes.destroyedRecordIds &&
           changes.destroyedRecordIds.length > 0
         ) {
-          console.log(`   - Found Deletions in Table ${tableId}.`);
+          console.log(`   🚨 DELETION DETECTED in Table ${tableId}!`);
+          console.log(
+            `   IDs Received from Airtable:`,
+            changes.destroyedRecordIds
+          );
 
-          await Response.updateMany(
+          // PERFORM UPDATE AND LOG RESULT
+          const dbResult = await Response.updateMany(
             { airtableRecordId: { $in: changes.destroyedRecordIds } },
             { isDeletedInAirtable: true }
           );
 
-          deletedCount += changes.destroyedRecordIds.length;
+          console.log(
+            `   MONGO DB RESULT: Matched=${dbResult.matchedCount}, Modified=${dbResult.modifiedCount}`
+          );
+
+          if (dbResult.matchedCount === 0) {
+            console.log(
+              "   ⚠️ WARNING: MongoDB found 0 records matching these IDs. Did you delete a record that wasn't in the DB?"
+            );
+          }
+
+          deletedCount += dbResult.modifiedCount;
+        } else {
+          // Optional check to see if we missed anything else:
+          if (changes.changedRecordsById) {
+            console.log(
+              `   ℹ️ Found ${
+                Object.keys(changes.changedRecordsById).length
+              } record edits, skipping...`
+            );
+          }
         }
       }
     }
 
     if (deletedCount > 0) {
       console.log(
-        `✅ SYNC COMPLETE: Marked ${deletedCount} records as deleted in MongoDB.`
+        `\n✅ SYNC COMPLETE: Marked ${deletedCount} records as deleted in MongoDB.`
       );
     } else {
-      console.log("ℹ️ SYNC COMPLETE: No deletions found in payload.");
+      console.log("\nℹ️ SYNC COMPLETE: No new deletions processed.");
     }
   };
 
@@ -134,49 +168,50 @@ export const handleAirtableWebhook = async (req, res) => {
 
     if (!systemUser) {
       console.warn(
-        "⚠️ Webhook Sync: No system user found for Airtable API access."
+        "⚠️ WEBHOOK SYNC: No system user found. Cannot fetch payload."
       );
       return res.sendStatus(200);
     }
 
-    // 1. Initial attempt to fetch payload
+    // --- MAIN EXECUTION LOGIC WITH TOKEN REFRESH ---
     try {
       await fetchAndProcessPayload(systemUser);
       return res.json({ success: true });
     } catch (apiError) {
-      // 2. Catch 401 error and attempt refresh
+      // Catch 401 error and attempt refresh
       if (apiError.response && apiError.response.status === 401) {
-        console.warn("⚠️ Access Token expired (401). Attempting to refresh...");
+        console.warn(
+          "⚠️ TOKEN EXPIRED: Access Token expired (401). Attempting to refresh..."
+        );
 
         if (!systemUser.refreshToken) {
-          console.error("❌ Token refresh failed: Missing refresh token.");
-          // Acknowledge the webhook but log failure
+          console.error("❌ REFRESH FAILED: Missing refresh token.");
           return res.sendStatus(200);
         }
 
         const newTokens = await refreshAirtableToken(systemUser.refreshToken);
 
-        // Update user tokens
         systemUser.accessToken = newTokens.accessToken;
         systemUser.refreshToken =
           newTokens.refreshToken || systemUser.refreshToken;
         await systemUser.save();
-        console.log("✅ Token successfully refreshed and saved to DB.");
+        console.log(
+          "✅ TOKEN REFRESH: Successfully refreshed and saved to DB. Retrying payload fetch..."
+        );
 
-        // 3. Retry fetching payload with new token
+        // Retry fetching payload with new token
         await fetchAndProcessPayload(systemUser);
         return res.json({ success: true });
       } else {
-        // Handle all other API errors (e.g., 404, 500)
+        // Handle all other API errors
         throw apiError;
       }
     }
   } catch (error) {
     console.error(
-      "❌ Webhook Sync Error (Final):",
+      "❌ WEBHOOK SYNC FAILURE:",
       error.response?.data || error.message
     );
-    // Always return 200 to Airtable to prevent them from retrying the webhook indefinitely
     res.sendStatus(200);
   }
 };
