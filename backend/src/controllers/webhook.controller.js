@@ -68,89 +68,88 @@ export const registerWebhook = async (req, res) => {
 
 /* ---------------- Handle Webhook Events ---------------- */
 export const handleAirtableWebhook = async (req, res) => {
-  // Log the raw webhook body first
-  console.log("📩 Webhook Event Received:", JSON.stringify(req.body, null, 2));
+  console.log("===== 🔔 WEBHOOK HIT START =====");
+  console.log("RAW HEADERS:", JSON.stringify(req.headers, null, 2));
+  console.log("RAW BODY:", JSON.stringify(req.body, null, 2));
 
-  // ⚠ Required: handle Airtable challenge verification
+  // Handle handshake challenge
   if (req.body?.challenge) {
-    console.log(
-      "🔐 Challenge received from Airtable → sending back challenge token"
-    );
+    console.log("🚨 Challenge received:", req.body.challenge);
+    console.log("===== 🔔 WEBHOOK CHALLENGE END =====");
     return res.status(200).send(req.body.challenge);
   }
 
   const baseId = req.body?.base?.id;
   const webhookId = req.body?.webhook?.id;
 
+  console.log("Parsed Base ID:", baseId);
+  console.log("Parsed Webhook ID:", webhookId);
+
   if (!baseId || !webhookId) {
-    console.log(
-      "⚠ Missing baseId or webhookId in payload — nothing to process"
-    );
+    console.log("❌ No baseId or webhookId received - nothing to process");
+    console.log("===== 🔔 WEBHOOK END (NO DATA) =====");
     return res.sendStatus(200);
   }
 
-  const processPayload = async (user) => {
-    const payloadResponse = await axios.get(
-      `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`,
-      { headers: { Authorization: `Bearer ${user.accessToken}` } }
-    );
+  const systemUser = await User.findOne({ accessToken: { $exists: true } });
+  console.log("SYSTEM USER FOUND:", systemUser?.email || "NO USER FOUND");
+
+  if (!systemUser) {
+    console.log("❌ No user found with Airtable tokens.");
+    return res.sendStatus(200);
+  }
+
+  const payloadUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`;
+  console.log("Fetching payloads from:", payloadUrl);
+
+  try {
+    const payloadResponse = await axios.get(payloadUrl, {
+      headers: { Authorization: `Bearer ${systemUser.accessToken}` },
+    });
 
     console.log(
-      "🔍 Detailed Payload Response:",
+      "📦 Airtable Payloads Response:",
       JSON.stringify(payloadResponse.data, null, 2)
     );
 
     for (const payload of payloadResponse.data.payloads) {
-      if (!payload.changedTablesById) continue;
+      console.log("Processing payload entry:", payload);
+
+      if (!payload.changedTablesById) {
+        console.log("⚠ No changedTablesById found, skipping...");
+        continue;
+      }
 
       for (const tableId in payload.changedTablesById) {
         const changes = payload.changedTablesById[tableId];
+        console.log("Changes detected:", JSON.stringify(changes, null, 2));
 
         if (changes.destroyedRecordIds?.length > 0) {
+          console.log("🗑 Destroyed Record IDs:", changes.destroyedRecordIds);
+
           const result = await Response.updateMany(
             { airtableRecordId: { $in: changes.destroyedRecordIds } },
             { isDeletedInAirtable: true }
           );
 
-          console.log(
-            `🗑 Delete Sync: ${result.modifiedCount} records marked as deleted`
-          );
+          console.log("Mongo Update Result:", result);
         }
       }
     }
-  };
 
-  try {
-    let systemUser = await User.findOne({ accessToken: { $exists: true } });
-
-    if (!systemUser) {
-      console.log("❌ No user with system Airtable access found");
-      return res.sendStatus(200);
-    }
-
-    try {
-      await processPayload(systemUser);
-      return res.status(200).json({ success: true });
-    } catch (apiError) {
-      if (apiError.response?.status === 401) {
-        console.log("🔄 Token expired — refreshing...");
-
-        if (!systemUser.refreshToken) return res.sendStatus(200);
-
-        const newTokens = await refreshAirtableToken(systemUser.refreshToken);
-        systemUser.accessToken = newTokens.accessToken;
-        systemUser.refreshToken =
-          newTokens.refreshToken || systemUser.refreshToken;
-        await systemUser.save();
-
-        await processPayload(systemUser);
-        return res.status(200).json({ success: true });
-      }
-
-      throw apiError;
-    }
+    console.log("===== 🔔 WEBHOOK END SUCCESS =====");
+    return res.status(200).json({ success: true });
   } catch (error) {
-    console.error("🔥 Webhook Sync Error:", error.message);
+    console.log(
+      "🔥 Payload Fetch Error:",
+      error.response?.data || error.message
+    );
+
+    if (error.response?.status === 401) {
+      console.log("🔄 REFRESH TOKEN REQUIRED - EXPIRED TOKEN!");
+    }
+
+    console.log("===== 🔔 WEBHOOK END ERROR =====");
     return res.sendStatus(200);
   }
 };
