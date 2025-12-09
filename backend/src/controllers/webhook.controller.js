@@ -3,6 +3,117 @@ import { Response } from "../models/response.model.js";
 import { Form } from "../models/form.model.js";
 import { User } from "../models/user.model.js";
 
+const processDeletions = async (destroyedRecordIds) => {
+  if (!destroyedRecordIds || destroyedRecordIds.length === 0) return;
+
+  console.log(`      🚨 [DELETE] IDs detected:`, destroyedRecordIds);
+
+  // Check existence (Debug)
+  const count = await Response.countDocuments({
+    airtableRecordId: { $in: destroyedRecordIds },
+  });
+
+  if (count === 0) {
+    console.warn(
+      `      ❌ [WARNING] No matching records found in DB to delete.`
+    );
+  } else {
+    console.log(
+      `      ✅ [DEBUG] Found ${count} matching records. Deleting...`
+    );
+  }
+
+  // Update DB
+  const updateResult = await Response.updateMany(
+    { airtableRecordId: { $in: destroyedRecordIds } },
+    { $set: { isDeletedInAirtable: true } }
+  );
+
+  console.log(
+    `      ✅ [DELETE COMPLETE] Matched: ${updateResult.matchedCount}, Modified: ${updateResult.modifiedCount}`
+  );
+};
+
+const processUpdates = async (changedRecordsById) => {
+  const recordIds = Object.keys(changedRecordsById);
+  if (recordIds.length === 0) return;
+
+  console.log(`      🔄 [UPDATE] Processing ${recordIds.length} records...`);
+
+  for (const recordId of recordIds) {
+    const changes = changedRecordsById[recordId];
+    const newCellValues = changes.current.cellValuesByFieldId;
+
+    if (!newCellValues) continue;
+
+    try {
+      // 1. Find the Response AND populate the Form to get the schema (FieldID -> QuestionKey mapping)
+      const responseDoc = await Response.findOne({
+        airtableRecordId: recordId,
+      }).populate("formId");
+
+      if (!responseDoc) {
+        console.warn(`      ⚠️ Record ${recordId} not found in DB. Skipping.`);
+        continue;
+      }
+
+      if (!responseDoc.formId) {
+        console.warn(
+          `      ⚠️ Record ${recordId} has no associated Form. Skipping.`
+        );
+        continue;
+      }
+
+      // 2. Create a lookup map: Airtable Field ID -> Question Key
+      // Form.questions = [{ airtableFieldId: 'fldXYZ', questionKey: 'email' }, ...]
+      const fieldToKeyMap = {};
+      responseDoc.formId.questions.forEach((q) => {
+        fieldToKeyMap[q.airtableFieldId] = q.questionKey;
+      });
+
+      // 3. Apply changes to the Map
+      let hasChanges = false;
+      for (const [fieldId, newValue] of Object.entries(newCellValues)) {
+        const questionKey = fieldToKeyMap[fieldId];
+
+        if (questionKey) {
+          // Update the specific answer in the Map
+          responseDoc.answers.set(questionKey, newValue);
+          hasChanges = true;
+          console.log(`        -> Updated field '${questionKey}'`);
+        }
+      }
+
+      // 4. Save if modified
+      if (hasChanges) {
+        // Mongoose requires this for Map types to detect changes
+        responseDoc.markModified("answers");
+        await responseDoc.save();
+        console.log(
+          `      ✅ [SAVED] Record ${recordId} updated successfully.`
+        );
+      }
+    } catch (err) {
+      console.error(
+        `      ❌ [ERROR] Updating record ${recordId}:`,
+        err.message
+      );
+    }
+  }
+};
+
+const processCreations = async (createdRecordsById) => {
+  // Logic for creating new records from Airtable -> DB is complex
+  // because we don't strictly know which 'Form' ID to assign them to
+  // without extra metadata. Keeping as log-only for now.
+  const count = Object.keys(createdRecordsById).length;
+  if (count > 0) {
+    console.log(
+      `      ✨ [INFO] ${count} new records created in Airtable (No DB Action taken).`
+    );
+  }
+};
+
 export const registerWebhook = async (req, res) => {
   console.log("\n========== REGISTER WEBHOOK START ==========");
   try {
@@ -197,18 +308,21 @@ export const handleAirtableWebhook = async (req, res) => {
           );
         }
         // --- DELETION LOGIC END ---
-        else if (changes.createdRecordsById) {
+        if (changes.createdRecordsById) {
           console.log(
             `       ✨ [Info] Records Created (Count: ${
               Object.keys(changes.createdRecordsById).length
-            }) - No action taken.`
+            }) `
           );
-        } else if (changes.changedRecordsById) {
+          await processCreations(changes.createdRecordsById);
+        }
+        if (changes.changedRecordsById) {
           console.log(
             `       Kg [Info] Records Updated (Count: ${
               Object.keys(changes.changedRecordsById).length
-            }) - No action taken.`
+            }) `
           );
+          await processUpdates(changes.changedRecordsById);
         }
       }
     }
