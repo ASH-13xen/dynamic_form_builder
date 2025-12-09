@@ -10,6 +10,11 @@ import webhookRoutes from "./routes/webhook.route.js";
 dotenv.config();
 const app = express();
 
+app.use((req, res, next) => {
+  res.setHeader("ngrok-skip-browser-warning", "true");
+  next();
+});
+
 app.use(
   cors({
     origin: process.env.CLIENT_URL,
@@ -21,6 +26,7 @@ const PORT = process.env.PORT;
 
 app.use(express.json());
 app.use(cookieParser());
+app.get("/", (req, res) => res.send("ok"));
 app.use("/api/webhooks", webhookRoutes);
 
 app.use("/api/auth", authRoutes);
