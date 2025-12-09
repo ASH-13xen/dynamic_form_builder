@@ -103,42 +103,55 @@ export const submitResponse = async (req, res) => {
     const { formId } = req.params;
     const { answers } = req.body;
 
-    console.log(`Submitting to Form ${formId}`, answers);
+    console.log(`📝 Submitting to Form ${formId}`, answers);
 
+    // 1. Validate Form & Owner
     const form = await Form.findById(formId);
     if (!form) return res.status(404).json({ error: "Form not found" });
+
     const owner = await User.findById(form.userId);
     if (!owner) return res.status(404).json({ error: "Form owner not found" });
 
-    const data = {};
-
+    // 2. Map Answers to Airtable Field IDs
+    const airtableData = {};
     form.questions.forEach((q) => {
       const answer = answers[q.questionKey];
-
+      // Only send fields that actually have answers
       if (answer !== undefined && answer !== "") {
-        data[q.airtableFieldId] = answer;
+        airtableData[q.airtableFieldId] = answer;
       }
     });
 
+    // 3. Send to Airtable
     const airtableUrl = `https://api.airtable.com/v0/${form.airtableBaseId}/${form.airtableTableId}`;
 
+    console.log("📤 Sending to Airtable...");
     const airtableRes = await axios.post(
       airtableUrl,
-      { fields: data },
+      { fields: airtableData },
       { headers: { Authorization: `Bearer ${owner.accessToken}` } }
     );
 
+    // 4. CAPTURE THE ID (Crucial Step)
     const newRecordId = airtableRes.data.id;
-    console.log("Saved to Airtable with ID:", newRecordId);
+    console.log("✅ Airtable accepted. Record ID:", newRecordId);
+
+    // 5. Save to MongoDB
     const response = await Response.create({
       formId: form._id,
-      airtableRecordId: newRecordId,
-      answers: answers,
+      airtableRecordId: newRecordId, // <--- This is what was missing before
+      answers: answers, // Saving the raw answers for your app's use
     });
+
+    console.log("💾 Saved to MongoDB with ID:", response._id);
+    console.log("   -> Linked Airtable ID:", response.airtableRecordId);
 
     res.status(201).json({ message: "Success", id: response._id });
   } catch (error) {
-    console.error("Submission Error:", error.response?.data || error.message);
+    console.error(
+      "❌ Submission Error:",
+      error.response?.data || error.message
+    );
     res.status(500).json({ error: "Failed to submit form" });
   }
 };
