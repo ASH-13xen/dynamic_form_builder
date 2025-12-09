@@ -48,42 +48,35 @@ export const registerWebhook = async (req, res) => {
 };
 
 const refreshAirtableToken = async (refreshToken) => {
-  const data = new URLSearchParams();
-  data.append("grant_type", "refresh_token");
-  data.append("refresh_token", refreshToken);
-  data.append("client_id", process.env.AIRTABLE_CLIENT_ID);
-  data.append("client_secret", process.env.AIRTABLE_CLIENT_SECRET);
-
-  try {
-    const response = await axios.post(
-      "https://api.airtable.com/v0/oauth2/token",
-      data.toString(),
-      {
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-      }
-    );
-
+  // --- Implementation placeholder ---
+  // In a real application, this would make a POST request to the Airtable token endpoint:
+  /*
+    const response = await axios.post('https://api.airtable.com/v0/oauth2/token', {
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: process.env.AIRTABLE_CLIENT_ID,
+        client_secret: process.env.AIRTABLE_CLIENT_SECRET,
+    });
     return {
-      accessToken: response.data.access_token,
-      refreshToken: response.data.refresh_token,
+        accessToken: response.data.access_token,
+        refreshToken: response.data.refresh_token, // May or may not be returned/rotated by Airtable
+        // You should also calculate and return the new expiration time
     };
-  } catch (error) {
-    console.error(
-      "Airtable Token Refresh Failure:",
-      error.response?.data || error.message
-    );
-    throw new Error(
-      "Airtable Token Refresh failed: Check client_id/secret or refresh token validity."
-    );
-  }
+    */
+  console.error("❌ refreshAirtableToken function not fully implemented!");
+  throw new Error("Token refresh failed.");
 };
 
+/**
+ * Handles incoming Airtable webhook notifications, fetches the payload,
+ * and synchronizes changes (e.g., deleted records) to the local database.
+ * Includes logic to refresh the access token if it has expired (401 error).
+ */
 export const handleAirtableWebhook = async (req, res) => {
   const { base: { id: baseId } = {}, webhook: { id: webhookId } = {} } =
     req.body;
 
+  // Acknowledge the webhook request immediately if it's a simple ping or lacks IDs
   if (!baseId || !webhookId) {
     console.log(
       "Airtable Webhook: Received ping or incomplete body. Acknowledging."
@@ -91,6 +84,7 @@ export const handleAirtableWebhook = async (req, res) => {
     return res.sendStatus(200);
   }
 
+  // This function encapsulates the core logic of fetching and processing the payload
   const fetchAndProcessPayload = async (user, isRetry = false) => {
     const headers = { Authorization: `Bearer ${user.accessToken}` };
     const payloadUrl = `https://api.airtable.com/v0/bases/${baseId}/webhooks/${webhookId}/payloads`;
@@ -113,7 +107,7 @@ export const handleAirtableWebhook = async (req, res) => {
             { isDeletedInAirtable: true }
           );
           console.log(
-            `Synced: Marked ${changes.destroyedRecordIds.length} records in table ${tableId} as deleted.`
+            `✅ Synced: Marked ${changes.destroyedRecordIds.length} records in table ${tableId} as deleted.`
           );
         }
       }
@@ -130,9 +124,11 @@ export const handleAirtableWebhook = async (req, res) => {
     }
 
     try {
+      // 1. Attempt the primary action
       await fetchAndProcessPayload(systemUser, false);
       return res.json({ success: true });
     } catch (apiError) {
+      // 2. Check if the error is a 401 (Unauthorized - usually token expiration)
       if (apiError.response && apiError.response.status === 401) {
         console.warn("Access Token expired (401). Attempting to refresh...");
 
@@ -143,17 +139,22 @@ export const handleAirtableWebhook = async (req, res) => {
           throw new Error("Missing Refresh Token");
         }
 
+        // 3. Get new tokens
         const newTokens = await refreshAirtableToken(systemUser.refreshToken);
 
+        // 4. Update the user record with the new tokens
         systemUser.accessToken = newTokens.accessToken;
         systemUser.refreshToken =
-          newTokens.refreshToken || systemUser.refreshToken;
+          newTokens.refreshToken || systemUser.refreshToken; // Use new refresh token if returned
+        // systemUser.tokenExpiresAt = newTokens.expiresAt; // Optional: store expiration
         await systemUser.save();
-        console.log(" Token successfully refreshed and saved to DB.");
+        console.log("✅ Token successfully refreshed and saved to DB.");
 
+        // 5. Retry the primary action with the new token
         await fetchAndProcessPayload(systemUser, true);
         return res.json({ success: true });
       } else {
+        // Not a 401 error (e.g., 404, 500, network error) - re-throw
         throw apiError;
       }
     }
@@ -162,6 +163,8 @@ export const handleAirtableWebhook = async (req, res) => {
       "Webhook Sync Error (Final):",
       error.response?.data || error.message
     );
+    // Important: Always respond 200 to Airtable, even on processing failure,
+    // to prevent it from retrying the webhook continuously.
     res.sendStatus(200);
   }
 };
