@@ -227,23 +227,21 @@ const refreshAirtableToken = async (refreshToken) => {
 };
 
 export const handleAirtableWebhook = async (req, res) => {
-  console.log("\n========== INCOMING WEBHOOK START ==========");
-
-  // Log the raw body immediately
-  console.log("📥 [1] Raw Request Body:", JSON.stringify(req.body, null, 2));
+  console.log("\nINCOMING WEBHOOK START");
+  console.log("Raw Request Body:", JSON.stringify(req.body, null, 2));
 
   const { base: { id: baseId } = {}, webhook: { id: webhookId } = {} } =
     req.body;
 
   if (!baseId || !webhookId) {
     console.log(
-      "⚠️ [2] Ping or incomplete body received (No BaseID or WebhookID). sending 200 OK."
+      "Ping or incomplete body received (No BaseID or WebhookID). sending 200 OK."
     );
-    console.log("========== INCOMING WEBHOOK END (PING) ==========\n");
+    console.log("INCOMING WEBHOOK END (PING)\n");
     return res.sendStatus(200);
   }
 
-  console.log(`[2] Processing Event -> Base: ${baseId}, Webhook: ${webhookId}`);
+  console.log(`Processing Event -> Base: ${baseId}, Webhook: ${webhookId}`);
 
   const fetchAndProcessPayload = async (user, isRetry = false) => {
     const headers = { Authorization: `Bearer ${user.accessToken}` };
@@ -251,66 +249,54 @@ export const handleAirtableWebhook = async (req, res) => {
 
     console.log(`   [3a] GET Request to: ${payloadUrl}`);
     const { data } = await axios.get(payloadUrl, { headers });
-
-    // 1. FILTER: Only look at payloads that actually have a table change
     const validPayloads = data.payloads.filter((p) => p.changedTablesById);
 
     console.log(
-      `   [3b] Found ${data.payloads.length} total payloads. (${validPayloads.length} have table changes)`
+      ` Found ${data.payloads.length} total payloads. (${validPayloads.length} have table changes)`
     );
 
     for (const payload of validPayloads) {
-      console.log(
-        `   [4] Processing Sequence #${payload.baseTransactionNumber}`
-      );
+      console.log(` Processing Sequence #${payload.baseTransactionNumber}`);
 
       for (const tableId in payload.changedTablesById) {
         const changes = payload.changedTablesById[tableId];
-
-        // --- DELETION LOGIC START ---
         if (
           changes.destroyedRecordIds &&
           changes.destroyedRecordIds.length > 0
         ) {
-          console.log(
-            `       🚨 [6] DELETE DETECTED. IDs:`,
-            changes.destroyedRecordIds
-          );
-
-          // DEBUG STEP: Check if these IDs actually exist in your DB before trying to update
+          console.log(`  DELETE DETECTED. IDs:`, changes.destroyedRecordIds);
           const count = await Response.countDocuments({
             airtableRecordId: { $in: changes.destroyedRecordIds },
           });
 
           if (count === 0) {
             console.error(
-              `       ❌ [CRITICAL WARNING] MongoDB contains 0 records with these airtableRecordIds!`
+              `MongoDB contains 0 records with these airtableRecordIds!`
             );
             console.error(
-              `          - Are you saving 'airtableRecordId' when you create the Response?`
+              `Are you saving 'airtableRecordId' when you create the Response?`
             );
             console.error(
-              `          - Expected ID format: ${changes.destroyedRecordIds[0]}`
+              `Expected ID format: ${changes.destroyedRecordIds[0]}`
             );
           } else {
             console.log(
-              `       ✅ [DEBUG] Found ${count} matching records in DB. Proceeding to update.`
+              `Found ${count} matching records in DB. Proceeding to update.`
             );
           }
 
           const updateResult = await Response.updateMany(
             { airtableRecordId: { $in: changes.destroyedRecordIds } },
-            { $set: { isDeletedInAirtable: true } } // Explicit $set is safer
+            { $set: { isDeletedInAirtable: true } }
           );
 
           console.log(
-            `       ✅ [7] DB Update Result: Matched ${updateResult.matchedCount}, Modified ${updateResult.modifiedCount}`
+            `DB Update Result: Matched ${updateResult.matchedCount}, Modified ${updateResult.modifiedCount}`
           );
         }
-        // --- DELETION LOGIC END ---
         if (changes.createdRecordsById) {
           console.log(
-            `       ✨ [Info] Records Created (Count: ${
+            `Records Created (Count: ${
               Object.keys(changes.createdRecordsById).length
             }) `
           );
@@ -318,7 +304,7 @@ export const handleAirtableWebhook = async (req, res) => {
         }
         if (changes.changedRecordsById) {
           console.log(
-            `       Kg [Info] Records Updated (Count: ${
+            `Records Updated (Count: ${
               Object.keys(changes.changedRecordsById).length
             }) `
           );
@@ -326,31 +312,28 @@ export const handleAirtableWebhook = async (req, res) => {
         }
       }
     }
-    console.log("   --- Payload Processing Finished ---\n");
+    console.log(" Payload Processing Finished \n");
   };
 
   try {
-    // 1. Find System User
     let systemUser = await User.findOne({ accessToken: { $exists: true } });
-    console.log(`[System User Check] Found: ${systemUser ? "Yes" : "No"}`);
+    console.log(`Found: ${systemUser ? "Yes" : "No"}`);
 
     if (!systemUser) {
       console.warn(
-        "❌ Webhook Sync: No system user found for Airtable API access."
+        "Webhook Sync: No system user found for Airtable API access."
       );
       return res.sendStatus(200);
     }
 
     try {
-      // 2. Attempt Processing
       console.log("[Attempt 1] Calling fetchAndProcessPayload...");
       await fetchAndProcessPayload(systemUser, false);
-      console.log("✅ [Success] Webhook handled successfully.");
+      console.log("Webhook handled successfully.");
       console.log("========== INCOMING WEBHOOK END ==========\n");
       return res.json({ success: true });
     } catch (apiError) {
-      // 3. Handle 401 / Refresh Logic
-      console.error(`⚠️ [API Error] Status: ${apiError.response?.status}`);
+      console.error(`Status: ${apiError.response?.status}`);
       console.error(`   - Message: ${JSON.stringify(apiError.response?.data)}`);
 
       if (apiError.response && apiError.response.status === 401) {
@@ -358,7 +341,7 @@ export const handleAirtableWebhook = async (req, res) => {
 
         if (!systemUser.refreshToken) {
           console.error(
-            "❌ Token refresh failed: No refresh token available on user object."
+            "Token refresh failed: No refresh token available on user object."
           );
           throw new Error("Missing Refresh Token");
         }
@@ -369,27 +352,20 @@ export const handleAirtableWebhook = async (req, res) => {
         systemUser.refreshToken =
           newTokens.refreshToken || systemUser.refreshToken;
         await systemUser.save();
-        console.log("💾 New tokens saved to Database.");
-
-        // 4. Retry Processing
-        console.log(
-          "[Attempt 2] Retrying fetchAndProcessPayload with new token..."
-        );
+        console.log("New tokens saved to Database.");
+        console.log("Retrying fetchAndProcessPayload with new token...");
         await fetchAndProcessPayload(systemUser, true);
 
-        console.log("✅ [Success] Webhook handled after refresh.");
-        console.log("========== INCOMING WEBHOOK END ==========\n");
+        console.log("Webhook handled after refresh.");
+        console.log("INCOMING WEBHOOK END\n");
         return res.json({ success: true });
       } else {
         throw apiError;
       }
     }
   } catch (error) {
-    console.error(
-      "❌ [FINAL ERROR] Webhook Sync Error:",
-      error.response?.data || error.message
-    );
-    console.log("========== INCOMING WEBHOOK END (ERROR) ==========\n");
-    res.sendStatus(200); // Send 200 to Airtable so they don't keep retrying failed logic
+    console.error("Webhook Sync Error:", error.response?.data || error.message);
+    console.log("INCOMING WEBHOOK END (ERROR)\n");
+    res.sendStatus(200);
   }
 };
